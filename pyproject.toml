@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepbiology-lab"
+version = "0.1.0"
+description = "CLI and Python client for DeepBiology Lab"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "DeepBiology" }]
+dependencies = [
+  "requests>=2.31.0",
+]
+
+[project.scripts]
+deepbiology-lab = "deepbiology_lab.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["deepbiology", "deepbiology_lab"]
