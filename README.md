@@ -14,7 +14,7 @@ pip install -e .
 ### From GitHub (after pushing repo)
 
 ```bash
-pip install git+https://github.com/<org>/<repo>.git#subdirectory=python_client
+pip install git+https://github.com/DeepBiology/deepbiology-lab.git#subdirectory=python_client
 ```
 
 ## Configure your API key

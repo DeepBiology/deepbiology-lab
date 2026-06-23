@@ -9,6 +9,7 @@ description = "CLI and Python client for DeepBiology Lab"
 readme = "README.md"
 requires-python = ">=3.9"
 authors = [{ name = "DeepBiology" }]
+urls = { repository = "https://github.com/DeepBiology/deepbiology-lab" }
 dependencies = [
   "requests>=2.31.0",
 ]
