@@ -1,5 +1,5 @@
 {
-  "name": "deepbiology-lab-python",
+  "name": "deepbiology",
   "version": "0.1.0",
   "description": "Codex plugin for DeepBiology Lab that gives agents workflows for gene regulation analysis, enhancer importance scanning, mutation impact evaluation, and enhancer redesign — plus gene alias resolution and job tracking.",
   "author": {
