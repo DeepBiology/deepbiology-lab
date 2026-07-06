@@ -1,0 +1,28 @@
+{
+  "name": "deepbiology-marketplace",
+  "owner": {
+    "name": "DeepBiology",
+    "email": "support@deepbiology.ai"
+  },
+  "metadata": {
+    "description": "Codex plugins for DeepBiology Lab — submit and track genomics research workflows from your AI coding agent.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "deepbiology",
+      "source": "./plugins/deepbiology",
+      "description": "Run DeepBiology Lab workflows — transcription regulation, enhancer analysis, mutation impact, and enhancer redesign — from Codex.",
+      "category": "Bioinformatics",
+      "tags": [
+        "deepbiology",
+        "genomics",
+        "enhancer",
+        "transcription",
+        "mutation",
+        "bioinformatics",
+        "gene-regulation"
+      ]
+    }
+  ]
+}

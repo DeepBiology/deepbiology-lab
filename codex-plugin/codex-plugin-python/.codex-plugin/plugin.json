@@ -1,0 +1,45 @@
+{
+  "name": "deepbiology-lab-python",
+  "version": "0.1.0",
+  "description": "Codex plugin for DeepBiology Lab that gives agents workflows for gene regulation analysis, enhancer importance scanning, mutation impact evaluation, and enhancer redesign — plus gene alias resolution and job tracking.",
+  "author": {
+    "name": "DeepBiology",
+    "email": "support@deepbiology.ai",
+    "url": "https://deepbiology.ai"
+  },
+  "homepage": "https://deepbiology.ai",
+  "repository": "https://github.com/DeepBiology/deepbiology-lab",
+  "license": "MIT",
+  "keywords": [
+    "deepbiology",
+    "genomics",
+    "enhancer",
+    "transcription-regulation",
+    "mutation-analysis",
+    "gene-expression",
+    "bioinformatics",
+    "python-sdk"
+  ],
+  "skills": "./skills",
+  "interface": {
+    "displayName": "DeepBiology Lab",
+    "shortDescription": "Submit genomics research workflows to DeepBiology Lab from Codex.",
+    "longDescription": "Provides seven Codex skills for DeepBiology Lab: gene alias resolution, transcription gradient analysis (Q1), enhancer mutation importance scan (Q2), mutation impact analysis (Q3), AI-driven enhancer redesign (Q4), job status checking, and result retrieval. Each skill uses a shared Python wrapper to submit jobs, poll for completion, and format results so agents can run DeepBiology workflows end to end.",
+    "developerName": "DeepBiology",
+    "category": "Science",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://deepbiology.ai",
+    "privacyPolicyURL": "https://deepbiology.ai/privacy",
+    "termsOfServiceURL": "https://deepbiology.ai/terms",
+    "brandColor": "#1a73e8",
+    "defaultPrompt": [
+      "Analyze the transcription regulation of CCND1 in myeloid cell lines.",
+      "Scan for important enhancer positions near the MYC gene.",
+      "What's the impact of this mutation on the CD34 enhancer region?",
+      "Redesign the enhancer around the BCL2 gene to optimize expression."
+    ]
+  }
+}
