@@ -11,7 +11,7 @@
   "plugins": [
     {
       "name": "deepbiology",
-      "source": "./plugins/deepbiology",
+      "source": "./codex-plugin-python",
       "description": "Run DeepBiology Lab workflows — transcription regulation, enhancer analysis, mutation impact, and enhancer redesign — from Codex.",
       "category": "Bioinformatics",
       "tags": [

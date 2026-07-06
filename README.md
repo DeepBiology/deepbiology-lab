@@ -216,7 +216,7 @@ export DEEPBIOLOGY_API_KEY=dbio_your_api_key_here
 
 ```bash
 # Point Codex at the local plugin directory
-codex --plugin-dir ./codex-plugin/codex-plugin-python
+codex --plugin-dir ./codex-plugin-python
 ```
 
 ### Architecture
@@ -238,13 +238,13 @@ flowchart LR
 ### Expanding the plugin
 
 To add a new skill:
-1. Create a new directory under `codex-plugin/codex-plugin-python/skills/` with a `SKILL.md`
-2. Add the workflow logic to `codex-plugin/codex-plugin-python/scripts/query.py` (if a new workflow type)
+1. Create a new directory under `codex-plugin-python/skills/` with a `SKILL.md`
+2. Add the workflow logic to `codex-plugin-python/scripts/query.py` (if a new workflow type)
 3. Register the skill in the plugin manifest
 4. That's it — Codex picks it up on next load
 
 To add a new alias to the gene resolver:
-1. Edit `CURATED_ALIASES` in `codex-plugin/codex-plugin-python/scripts/query.py`
+1. Edit `CURATED_ALIASES` in `codex-plugin-python/scripts/query.py`
 2. Add a new line: `"ALIAS": "CANONICAL_SYMBOL",`
 
 ## Notes
