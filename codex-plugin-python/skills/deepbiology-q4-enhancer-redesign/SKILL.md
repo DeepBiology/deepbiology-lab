@@ -6,7 +6,8 @@ description: Submit a Q4 enhancer redesign workflow — AI-driven optimization o
 ## Workflow
 
 1. If the user provides a gene name in natural language, first run `deepbiology-resolve-gene` to get the canonical HGNC symbol
-2. Submit the workflow: `python scripts/query.py --workflow q4 --gene-name <SYMBOL> --center <CENTER> --flanking-size <SIZE> --iterations <N> --cell-line <CELL_LINE>`
+2. If the user provides a cell line name in natural language, first run `deepbiology-resolve-cell-line` to get the canonical form
+3. Submit the workflow: `python scripts/query.py --workflow q4 --gene-name <SYMBOL> --center <CENTER> --flanking-size <SIZE> --iterations <N> --cell-line <CELL_LINE>`
 3. The script submits the job, polls until completion, and returns the clean result as JSON
 4. Present the results to the user:
    - Show the optimized enhancer sequence from `optimizedSequence`
@@ -22,6 +23,7 @@ description: Submit a Q4 enhancer redesign workflow — AI-driven optimization o
 | `--center` | No | 207923820 | Center coordinate for the enhancer region |
 | `--flanking-size` | No | 75 | Flanking size in base pairs |
 | `--iterations` | No | 250 | Number of optimization iterations |
+| `--max-runtime-hours` | No | 24 | Maximum runtime in hours |
 | `--cell-line` | No | "195" | Cell line identifier |
 | `--mode` | No | "medium" | Analysis mode: "fast", "medium", or "high" |
 
@@ -46,6 +48,7 @@ The script prints a JSON object with:
 ## Always Do This
 
 - Resolve natural-language gene names first using deepbiology-resolve-gene
+- Resolve natural-language cell line names first using deepbiology-resolve-cell-line
 - Ask the user if they want to adjust center, flanking size, or iterations
   from the defaults before submitting (especially for genes with known
   well-characterized enhancer regions)

@@ -244,6 +244,236 @@ def resolve_gene(query: str) -> str:
     })
 
 
+# ── Tool: resolve_cell_line ───────────────────────────────────────
+
+@server.tool(description="Resolve a cell line name/alias to its canonical identifier by normalizing hyphens, spaces, and casing")
+def resolve_cell_line(query: str) -> str:
+    """
+    Resolve a cell line name to its canonical form.
+
+    Normalizes by stripping all non-alphanumeric characters (hyphens,
+    spaces, dots, underscores) and uppercasing. For example:
+      "kasumi-1" -> "KASUMI1"
+      "Kasumi 1" -> "KASUMI1"
+      "sk-mel-28" -> "SKMEL28"
+      "NCI-H1781" -> "NCIH1781"
+      "ls-513" -> "LS513"
+
+    Args:
+        query: Cell line name (e.g. "kasumi-1", "SK-MEL-28", "K562")
+
+    Returns:
+        JSON with the canonical cell line name.
+    """
+    import re
+    canonical = re.sub(r"[^a-zA-Z0-9]", "", query.strip()).upper()
+    return json.dumps({
+        "matched": bool(canonical),
+        "canonicalName": canonical if canonical else None,
+        "original": query,
+        "resolvedVia": "normalization",
+    })
+
+
+# ── Tool: resolve_snps ────────────────────────────────────────────
+
+ENSEMBL_BASE = "https://rest.ensembl.org"
+
+
+@server.tool(description="Query SNPs within a genomic coordinate range (hg38) via Ensembl")
+def resolve_snps(
+    region: str,
+    genome_build: str = "hg38",
+    max_results: int = 50,
+) -> str:
+    """
+    Query known SNPs/variants within a genomic coordinate range using
+    the Ensembl REST API (hg38/GRCh38).
+
+    Args:
+        region: Genomic region in the format "chr:start-end" (e.g. "1:207923720-207923920")
+        genome_build: Genome build (default "hg38"; "hg19" not supported by this endpoint)
+        max_results: Maximum number of results to return (default 50, max 200)
+
+    Returns:
+        JSON array of variants with rsID, position, alleles, and type.
+    """
+    import json as _json
+    import urllib.request
+    import urllib.error
+
+    # Normalize region: strip "chr" prefix, split on : and -
+    region_clean = region.replace("chr", "").replace("CHR", "").strip()
+    url = f"{ENSEMBL_BASE}/overlap/region/human/{region_clean}?feature=variation"
+    if max_results and max_results > 0:
+        url += f";size={min(max_results, 200)}"
+
+    req = urllib.request.Request(url, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = _json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        return _json.dumps({"error": f"Ensembl API error: {e.code} {e.reason}", "region": region})
+    except Exception as e:
+        return _json.dumps({"error": f"Failed to query Ensembl: {str(e)}", "region": region})
+
+    results = []
+    for v in data:
+        results.append({
+            "rsid": v.get("id"),
+            "chromosome": v.get("seq_region_name"),
+            "start": v.get("start"),
+            "end": v.get("end"),
+            "alleles": v.get("allele_string"),
+            "variant_class": v.get("variant_class", ""),
+            "clinical_significance": v.get("clinical_significance", []),
+        })
+
+    return _json.dumps({
+        "region": region,
+        "genome_build": genome_build,
+        "count": len(results),
+        "variants": results,
+    }, indent=2)
+
+
+# ── Tool: resolve_snp_impact ──────────────────────────────────────
+
+@server.tool(description="Look up a specific SNP (rsID) and its predicted impact on nearby genes via Ensembl VEP")
+def resolve_snp_impact(rsid: str) -> str:
+    """
+    Look up a specific SNP by its rsID and get its predicted functional
+    impact on nearby genes using the Ensembl VEP (Variant Effect Predictor).
+
+    Args:
+        rsid: The dbSNP rsID (e.g. "rs1053802528", "rs1405746147")
+
+    Returns:
+        JSON with gene-level consequences, impact severity, and variant location.
+    """
+    import json as _json
+    import urllib.request
+    import urllib.error
+
+    # Normalize rsID
+    rsid = rsid.strip()
+    if not rsid.startswith("rs"):
+        rsid = f"rs{rsid}"
+
+    url = f"{ENSEMBL_BASE}/vep/human/id/{rsid}"
+    req = urllib.request.Request(url, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = _json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        return _json.dumps({"error": f"Ensembl VEP error: {e.code} {e.reason}", "rsid": rsid})
+    except Exception as e:
+        return _json.dumps({"error": f"Failed to query Ensembl VEP: {str(e)}", "rsid": rsid})
+
+    result = {"rsid": rsid, "genes": []}
+
+    for item in data:
+        result["location"] = f"{item.get('seq_region_name')}:{item.get('start')}"
+        result["allele_string"] = item.get("allele_string", "")
+        result["most_severe_consequence"] = item.get("most_severe_consequence", "")
+
+        for tc in item.get("transcript_consequences", []):
+            result["genes"].append({
+                "gene_symbol": tc.get("gene_symbol", ""),
+                "gene_id": tc.get("gene_id", ""),
+                "impact": tc.get("impact", ""),
+                "consequence_terms": tc.get("consequence_terms", []),
+                "biotype": tc.get("biotype", ""),
+                "strand": tc.get("strand"),
+            })
+
+        for ic in item.get("intergenic_consequences", []):
+            result["genes"].append({
+                "gene_symbol": ic.get("gene_symbol", ""),
+                "impact": "INTERGENIC",
+                "consequence_terms": ["intergenic_variant"],
+                "distance": ic.get("distance", ""),
+            })
+
+    return _json.dumps(result, indent=2)
+
+
+# ── Tool: resolve_cancer_mutations ────────────────────────────────
+
+@server.tool(description="Query known cancer (somatic) mutations for a gene via myvariant.info (COSMIC + ClinVar + CADD)")
+def resolve_cancer_mutations(
+    gene_name: str,
+    tumor_site: str = "",
+    max_results: int = 20,
+) -> str:
+    """
+    Query known somatic/cancer mutations for a gene using myvariant.info,
+    which aggregates data from COSMIC, ClinVar, and CADD.
+
+    Args:
+        gene_name: HGNC gene symbol (e.g. "TP53", "KRAS", "BRAF", "EGFR")
+        tumor_site: Optional tumor site filter (e.g. "lung", "breast", "pancreas", "AML")
+        max_results: Maximum number of results (default 20, max 100)
+
+    Returns:
+        JSON array of mutations with COSMIC IDs, tumor sites, CADD scores, and clinical significance.
+    """
+    import json as _json
+    import urllib.request
+    import urllib.parse
+
+    query = urllib.parse.quote(gene_name)
+    fields = "cosmic,cadd,clinvar,dbsnp,dbnsfp"
+    url = (
+        f"https://myvariant.info/v1/query"
+        f"?q={query}&fields={fields}&species=human"
+        f"&size={min(max_results, 100)}"
+    )
+
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = _json.loads(resp.read())
+    except Exception as e:
+        return _json.dumps({"error": f"Failed to query myvariant.info: {str(e)}", "gene": gene_name})
+
+    results = []
+    for hit in data.get("hits", []):
+        cosmic = hit.get("cosmic") or {}
+        cadd = hit.get("cadd") or {}
+        dbsnp = hit.get("dbsnp") or {}
+        clinvar = hit.get("clinvar") or {}
+
+        # Filter by tumor site if specified
+        if tumor_site:
+            site = (cosmic.get("tumor_site") or "").lower()
+            if tumor_site.lower() not in site:
+                continue
+
+        entry = {
+            "variant": hit.get("_id", ""),
+            "rsid": dbsnp.get("rsid", ""),
+            "cosmic_id": cosmic.get("cosmic_id", ""),
+            "tumor_site": cosmic.get("tumor_site", ""),
+            "mut_freq": cosmic.get("mut_freq"),
+            "cadd_phred": cadd.get("phred"),
+            "cadd_score": cadd.get("consscore"),
+        }
+
+        if clinvar:
+            entry["clinical_significance"] = clinvar.get("clinical_significance", "")
+
+        results.append(entry)
+
+    return _json.dumps({
+        "gene": gene_name,
+        "tumor_site_filter": tumor_site or "none",
+        "total_matches": data.get("total", 0),
+        "returned": len(results),
+        "mutations": results,
+    }, indent=2)
+
+
 # ── Shared: Build inputs + submit ─────────────────────────────────
 
 def _submit(workflow_key: str, inputs: Dict[str, Any]) -> str:
@@ -269,26 +499,44 @@ def submit_q1_regulation(
     gene_name: str,
     cell_line: str = "195",
     mode: str = "medium",
+    chip_seq_factor: str = "SRR3082397",
+    check_overlap: bool = True,
+    top_n: int = 3,
     notes: str = "",
 ) -> str:
     """
     Submit a Q1 (regulation) workflow — plots transcription gradient
     for a gene across genomic coordinates in a given cell line.
 
+    The `chip_seq_factor` and `check_overlap` parameters control enhancer
+    candidate filtering. `check_overlap=True` (default) limits results to
+    enhancers that overlap with ChIP-seq peaks for the given factor.
+    The default factor SRR3082397 is specific to AML cells — set
+    `check_overlap=False` for non-AML cell lines.
+
     Args:
         gene_name: Official HGNC gene symbol (e.g. "CD34", "CCND1", "MYC")
         cell_line: Cell line identifier (default "195")
         mode: Analysis mode ("fast", "medium", or "high")
+        chip_seq_factor: ChIP-seq factor for peak overlap filtering (default "SRR3082397"; AML-specific)
+        check_overlap: Filter enhancers by ChIP-seq peak overlap (default True; set False for non-AML cells)
+        top_n: Number of top enhancer candidates to return (default 3)
         notes: Optional notes or description
 
     Returns:
         JSON with job ID for tracking.
     """
-    sequence = f"task=plot_transcription_gradient;gene={gene_name};cell_line={cell_line}"
+    sequence = (
+        f"task=plot_transcription_gradient;gene={gene_name};cell_line={cell_line};"
+        f"chip_seq_factor={chip_seq_factor};top_n={top_n};check_overlap={str(check_overlap).lower()}"
+    )
     return _submit("q1_regulation", {
         "task": "plot_transcription_gradient",
         "gene_name": gene_name,
         "cell_line": cell_line,
+        "chip_seq_factor": chip_seq_factor,
+        "check_overlap": check_overlap,
+        "top_n": top_n,
         "mode": mode,
         "notes": notes or f"Submitted via MCP: Q1 regulation for {gene_name}",
         "sequence": sequence,
@@ -388,6 +636,7 @@ def submit_q4_enhancer_redesign(
     center: int = 207923820,
     flanking_size: int = 75,
     iterations: int = 250,
+    max_runtime_hours: int = 24,
     mode: str = "medium",
     notes: str = "",
 ) -> str:
@@ -401,6 +650,7 @@ def submit_q4_enhancer_redesign(
         center: Center coordinate for the enhancer region (default 207923820)
         flanking_size: Flanking size in base pairs (default 75)
         iterations: Number of optimization iterations (default 250)
+        max_runtime_hours: Maximum runtime in hours (default 24)
         mode: Analysis mode ("fast", "medium", or "high")
         notes: Optional notes or description
 
@@ -418,6 +668,7 @@ def submit_q4_enhancer_redesign(
         "center": center,
         "flanking_size": flanking_size,
         "iterations": iterations,
+        "max_runtime_hours": max_runtime_hours,
         "mode": mode,
         "notes": notes or f"Submitted via MCP: Q4 enhancer redesign for {gene_name}",
         "sequence": sequence,
@@ -470,6 +721,37 @@ def get_job_result(job_id: str) -> str:
     raw = client.get_job_result(job_id)
     clean = client.format_clean_result(raw)
     return json.dumps(clean, indent=2, default=str)
+
+
+# ── Tool: list_models ─────────────────────────────────────────────
+
+@server.tool(description="List available DeepBiology Lab models and their supported workflows")
+def list_models() -> str:
+    """
+    List the available analysis models and what workflows each supports.
+
+    Returns:
+        JSON array of models with id, name, description, and supported workflows.
+    """
+    models = [
+        {
+            "id": "borzoi_finetune_v1",
+            "name": "Borzoi Fine-tune v1",
+            "description": "Production model trained on ChIP-seq, Gro-seq, and RNA-seq data",
+            "supportedWorkflows": ["q1_regulation", "q2_enhancer_importance", "q3_mutation_impact", "q4_enhancer_redesign"],
+            "catalog": "samplefile_w_anno_for_chipseq_with6cols.csv",
+            "cellLines": "785 cell lines from ChIP-seq/Gro-seq/RNA-seq experiments",
+        },
+        {
+            "id": "borzoi_finetune_ccle_v1",
+            "name": "Borzoi Fine-tune CCLE v1",
+            "description": "CCLE-trained model covering 1019 cancer cell lines",
+            "supportedWorkflows": ["q1_regulation", "q2_enhancer_importance", "q3_mutation_impact", "q4_enhancer_redesign"],
+            "catalog": "samplefile_annotated_ccle_new.csv",
+            "cellLines": "1019 cancer cell lines from CCLE",
+        },
+    ]
+    return json.dumps(models, indent=2)
 
 
 # ── Entry Point ───────────────────────────────────────────────────

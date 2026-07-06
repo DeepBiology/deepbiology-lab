@@ -6,7 +6,8 @@ description: Submit a Q3 mutation impact workflow — evaluates the effect of a 
 ## Workflow
 
 1. If the user provides a gene name in natural language, first run `deepbiology-resolve-gene` to get the canonical HGNC symbol
-2. Submit the workflow: `python scripts/query.py --workflow q3 --gene-name <SYMBOL> --coordinate <COORD> --mutated-seq <SEQ> --cell-line <CELL_LINE>`
+2. If the user provides a cell line name in natural language, first run `deepbiology-resolve-cell-line` to get the canonical form
+3. Submit the workflow: `python scripts/query.py --workflow q3 --gene-name <SYMBOL> --coordinate <COORD> --mutated-seq <SEQ> --cell-line <CELL_LINE>`
 3. The script submits the job, polls until completion, and returns the clean result as JSON
 4. Present the results to the user:
    - Compare the mutation's effect on transcription factor binding
@@ -43,4 +44,5 @@ The script prints a JSON object with:
 ## Always Do This
 
 - Resolve natural-language gene names first using deepbiology-resolve-gene
+- Resolve natural-language cell line names first using deepbiology-resolve-cell-line
 - Ensure the coordinate matches the region where the mutated sequence lies

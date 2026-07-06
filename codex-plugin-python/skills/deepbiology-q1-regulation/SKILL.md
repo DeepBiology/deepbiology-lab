@@ -6,7 +6,8 @@ description: Submit a Q1 transcription regulation workflow — plots the transcr
 ## Workflow
 
 1. If the user provides a gene name in natural language (e.g. "cyclin D1"), first run `deepbiology-resolve-gene` to get the canonical HGNC symbol
-2. Submit the workflow: `python scripts/query.py --workflow q1 --gene-name <SYMBOL> --cell-line <CELL_LINE>`
+2. If the user provides a cell line name in natural language (e.g. "kasumi-1", "SK-MEL-28"), first run `deepbiology-resolve-cell-line` to get the canonical form
+3. Submit the workflow: `python scripts/query.py --workflow q1 --gene-name <SYMBOL> --cell-line <CELL_LINE>`
 3. The script submits the job, polls until completion, and returns the clean result as JSON
 4. Present the results to the user:
    - Summarize the key findings from the `fields` and `notes`
@@ -20,7 +21,25 @@ description: Submit a Q1 transcription regulation workflow — plots the transcr
 | `--gene-name` | Yes | — | Official HGNC gene symbol (e.g. CCND1, CD34, MYC) |
 | `--cell-line` | No | "195" | Cell line identifier |
 | `--mode` | No | "medium" | Analysis mode: "fast", "medium", or "high" |
+| `--chip-seq-factor` | No | "SRR3082397" | ChIP-seq factor for peak overlap filtering (AML-specific) |
+| `--check-overlap` | No | True | Filter enhancers by ChIP-seq peak overlap |
+| `--top-n` | No | 3 | Number of top enhancer candidates to return |
 | `--notes` | No | "" | Optional description |
+
+## Important: check_overlap guidance
+
+The `--chip-seq-factor` parameter (default `SRR3082397`) defines a set of
+ChIP-seq peaks. When `--check-overlap` is `True` (the default), only enhancer
+candidates that overlap with those peaks are returned.
+
+**The default factor SRR3082397 is specific to AML cells.** For non-AML cell
+lines, you should set `--check-overlap False` to return all enhancer candidates
+regardless of ChIP-seq peak overlap.
+
+| Cell type | check_overlap | Reason |
+|-----------|--------------|--------|
+| AML (e.g. Kasumi-1) | True | SRR3082397 peaks are relevant |
+| Non-AML (e.g. K562, HEK293) | False | SRR3082397 peaks are AML-specific |
 
 ## Example
 
@@ -42,4 +61,5 @@ The script prints a JSON object with:
 ## Always Do This
 
 - Resolve natural-language gene names first using deepbiology-resolve-gene
+- Resolve natural-language cell line names first using deepbiology-resolve-cell-line
 - Default to cell line "195" unless the user specifies otherwise

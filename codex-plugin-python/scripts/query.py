@@ -170,6 +170,148 @@ def _resolve_gene(query: str) -> str:
     return json.dumps({"matched": False, "canonicalName": None, "query": query, "resolvedVia": "not_found"})
 
 
+# ── Workflow: resolve-cell-line ────────────────────────────────────
+
+def _resolve_cell_line(query: str) -> str:
+    canonical = re.sub(r"[^a-zA-Z0-9]", "", query.strip()).upper()
+    return json.dumps({
+        "matched": bool(canonical),
+        "canonicalName": canonical if canonical else None,
+        "original": query,
+        "resolvedVia": "normalization",
+    })
+
+
+# ── Workflow: resolve-snps ────────────────────────────────────────
+
+ENSEMBL_BASE = "https://rest.ensembl.org"
+
+
+def _resolve_snps(region: str, max_results: int = 50) -> str:
+    """Query Ensembl REST API for variants in a region."""
+    import json as _json
+    import urllib.request, urllib.error
+
+    region_clean = region.replace("chr", "").replace("CHR", "").strip()
+    url = f"{ENSEMBL_BASE}/overlap/region/human/{region_clean}?feature=variation"
+    if max_results > 0:
+        url += f";size={min(max_results, 200)}"
+
+    try:
+        req = urllib.request.Request(url, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = _json.loads(resp.read())
+    except Exception as e:
+        return _json.dumps({"error": f"Failed to query Ensembl: {str(e)}", "region": region})
+
+    results = []
+    for v in data:
+        results.append({
+            "rsid": v.get("id"),
+            "chromosome": v.get("seq_region_name"),
+            "start": v.get("start"),
+            "end": v.get("end"),
+            "alleles": v.get("allele_string"),
+            "variant_class": v.get("variant_class", ""),
+            "clinical_significance": v.get("clinical_significance", []),
+        })
+
+    return _json.dumps({
+        "region": region,
+        "genome_build": "hg38",
+        "count": len(results),
+        "variants": results,
+    }, indent=2)
+
+
+def _resolve_snp_impact(rsid: str) -> str:
+    """Query Ensembl VEP for a specific rsID."""
+    import json as _json
+    import urllib.request, urllib.error
+
+    rsid = rsid.strip()
+    if not rsid.startswith("rs"):
+        rsid = f"rs{rsid}"
+
+    url = f"{ENSEMBL_BASE}/vep/human/id/{rsid}"
+    try:
+        req = urllib.request.Request(url, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = _json.loads(resp.read())
+    except Exception as e:
+        return _json.dumps({"error": f"Failed to query Ensembl VEP: {str(e)}", "rsid": rsid})
+
+    result = {"rsid": rsid, "genes": []}
+    for item in data:
+        result["location"] = f"{item.get('seq_region_name')}:{item.get('start')}"
+        result["allele_string"] = item.get("allele_string", "")
+        result["most_severe_consequence"] = item.get("most_severe_consequence", "")
+        for tc in item.get("transcript_consequences", []):
+            result["genes"].append({
+                "gene_symbol": tc.get("gene_symbol", ""),
+                "gene_id": tc.get("gene_id", ""),
+                "impact": tc.get("impact", ""),
+                "consequence_terms": tc.get("consequence_terms", []),
+                "biotype": tc.get("biotype", ""),
+            })
+        for ic in item.get("intergenic_consequences", []):
+            result["genes"].append({
+                "gene_symbol": ic.get("gene_symbol", ""),
+                "impact": "INTERGENIC",
+                "consequence_terms": ["intergenic_variant"],
+                "distance": ic.get("distance", ""),
+            })
+
+    return _json.dumps(result, indent=2)
+
+
+# ── Workflow: resolve-cancer-mutations ────────────────────────────
+
+def _resolve_cancer_mutations(gene_name: str, tumor_site: str = "", max_results: int = 20) -> str:
+    """Query myvariant.info for somatic/cancer mutations in a gene."""
+    import json as _json
+    import urllib.request, urllib.parse
+
+    query = urllib.parse.quote(gene_name)
+    fields = "cosmic,cadd,clinvar,dbsnp"
+    url = f"https://myvariant.info/v1/query?q={query}&fields={fields}&species=human&size={min(max_results, 100)}"
+
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = _json.loads(resp.read())
+    except Exception as e:
+        return _json.dumps({"error": f"Failed: {str(e)}", "gene": gene_name})
+
+    results = []
+    for hit in data.get("hits", []):
+        cosmic = hit.get("cosmic") or {}
+        cadd = hit.get("cadd") or {}
+        dbsnp = hit.get("dbsnp") or {}
+        clinvar = hit.get("clinvar") or {}
+        if tumor_site:
+            site = (cosmic.get("tumor_site") or "").lower()
+            if tumor_site.lower() not in site:
+                continue
+        results.append({
+            "variant": hit.get("_id", ""),
+            "rsid": dbsnp.get("rsid", ""),
+            "cosmic_id": cosmic.get("cosmic_id", ""),
+            "tumor_site": cosmic.get("tumor_site", ""),
+            "mut_freq": cosmic.get("mut_freq"),
+            "cadd_phred": cadd.get("phred"),
+            "clinical_significance": clinvar.get("clinical_significance", ""),
+        })
+
+    return _json.dumps({
+        "gene": gene_name,
+        "tumor_site_filter": tumor_site or "none",
+        "total_matches": data.get("total", 0),
+        "returned": len(results),
+        "mutations": results,
+    }, indent=2)
+
+
 # ── Workflow: submit ───────────────────────────────────────────────
 
 WORKFLOW_MAP = {
@@ -187,13 +329,19 @@ def _build_inputs(workflow: str, args: argparse.Namespace) -> Dict[str, Any]:
     notes = args.notes or f"Submitted via Codex: {workflow}"
 
     if workflow == "q1_regulation":
+        chip_seq_factor = getattr(args, "chip_seq_factor", "SRR3082397")
+        check_overlap = getattr(args, "check_overlap", True)
+        top_n = getattr(args, "top_n", 3)
         return {
             "task": "plot_transcription_gradient",
             "gene_name": gene_name,
             "cell_line": cell_line,
+            "chip_seq_factor": chip_seq_factor,
+            "check_overlap": check_overlap,
+            "top_n": top_n,
             "mode": mode,
             "notes": notes,
-            "sequence": f"task=plot_transcription_gradient;gene={gene_name};cell_line={cell_line}",
+            "sequence": f"task=plot_transcription_gradient;gene={gene_name};cell_line={cell_line};chip_seq_factor={chip_seq_factor};top_n={top_n};check_overlap={str(check_overlap).lower()}",
         }
 
     if workflow == "q2_enhancer_importance":
@@ -231,6 +379,7 @@ def _build_inputs(workflow: str, args: argparse.Namespace) -> Dict[str, Any]:
     center = args.center or 207923820
     flanking_size = args.flanking_size or 75
     iterations = args.iterations or 250
+    max_runtime_hours = getattr(args, "max_runtime_hours", 24)
     return {
         "task": "enhancerOpt",
         "gene_name": gene_name,
@@ -238,6 +387,7 @@ def _build_inputs(workflow: str, args: argparse.Namespace) -> Dict[str, Any]:
         "center": center,
         "flanking_size": flanking_size,
         "iterations": iterations,
+        "max_runtime_hours": max_runtime_hours,
         "mode": mode,
         "notes": notes,
         "sequence": f"task=enhancerOpt;center={center};flanking_size={flanking_size};iterations={iterations};gene={gene_name};cell_line={cell_line}",
@@ -324,8 +474,12 @@ def _get_result(job_id: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description="DeepBiology Lab — Codex wrapper")
     parser.add_argument("--workflow", required=True,
-                        choices=["resolve-gene", "q1", "q2", "q3", "q4", "status", "result"])
-    parser.add_argument("--query", help="Gene name/alias for resolve-gene")
+                        choices=["resolve-gene", "resolve-cell-line", "resolve-snps", "resolve-snp-impact", "resolve-cancer-mutations", "list-models", "q1", "q2", "q3", "q4", "status", "result"])
+    parser.add_argument("--query", help="Gene name/alias for resolve-gene; or cell line for resolve-cell-line")
+    parser.add_argument("--region", help="Genomic region (e.g. chr1:207923720-207923920) for resolve-snps")
+    parser.add_argument("--rsid", help="dbSNP rsID (e.g. rs1053802528) for resolve-snp-impact")
+    parser.add_argument("--tumor-site", default="", help="Tumor site filter for resolve-cancer-mutations (e.g. lung, breast, pancreas)")
+    parser.add_argument("--max-results", type=int, default=50, help="Max results (for resolve-snps or resolve-cancer-mutations)")
     parser.add_argument("--job-id", help="Job ID for status/result workflows")
     parser.add_argument("--gene-name", help="HGNC gene symbol")
     parser.add_argument("--cell-line", default="195")
@@ -335,9 +489,13 @@ def main() -> None:
     parser.add_argument("--mutated-seq", help="Mutated DNA sequence (for Q3)")
     parser.add_argument("--ref", default="", help="Reference sequence (for Q3)")
     parser.add_argument("--tf", default="", help="Transcription factor (for Q3)")
+    parser.add_argument("--chip-seq-factor", default="SRR3082397", help="ChIP-seq factor for peak overlap (for Q1)")
+    parser.add_argument("--check-overlap", type=bool, default=True, help="Filter by ChIP-seq peak overlap (for Q1)")
+    parser.add_argument("--top-n", type=int, default=3, help="Number of top enhancer candidates (for Q1)")
     parser.add_argument("--center", type=int, help="Center coordinate (for Q4)")
     parser.add_argument("--flanking-size", type=int, default=75, help="Flanking size in bp (for Q4)")
     parser.add_argument("--iterations", type=int, default=250, help="Optimization iterations (for Q4)")
+    parser.add_argument("--max-runtime-hours", type=int, default=24, help="Maximum runtime in hours (for Q4)")
 
     args = parser.parse_args()
 
@@ -346,6 +504,56 @@ def main() -> None:
             print(json.dumps({"error": "--query is required for resolve-gene"}))
             sys.exit(1)
         print(_resolve_gene(args.query))
+        return
+
+    if args.workflow == "resolve-cell-line":
+        if not args.query:
+            print(json.dumps({"error": "--query is required for resolve-cell-line"}))
+            sys.exit(1)
+        print(_resolve_cell_line(args.query))
+        return
+
+    if args.workflow == "list-models":
+        models = [
+            {
+                "id": "borzoi_finetune_v1",
+                "name": "Borzoi Fine-tune v1",
+                "description": "Production model trained on ChIP-seq, Gro-seq, and RNA-seq data",
+                "supportedWorkflows": ["q1_regulation", "q2_enhancer_importance", "q3_mutation_impact", "q4_enhancer_redesign"],
+                "catalog": "samplefile_w_anno_for_chipseq_with6cols.csv",
+                "cellLines": "785 cell lines from ChIP-seq/Gro-seq/RNA-seq experiments",
+            },
+            {
+                "id": "borzoi_finetune_ccle_v1",
+                "name": "Borzoi Fine-tune CCLE v1",
+                "description": "CCLE-trained model covering 1019 cancer cell lines",
+                "supportedWorkflows": ["q1_regulation", "q2_enhancer_importance", "q3_mutation_impact", "q4_enhancer_redesign"],
+                "catalog": "samplefile_annotated_ccle_new.csv",
+                "cellLines": "1019 cancer cell lines from CCLE",
+            },
+        ]
+        print(json.dumps(models, indent=2))
+        return
+
+    if args.workflow == "resolve-cancer-mutations":
+        if not args.gene_name:
+            print(json.dumps({"error": "--gene-name is required for resolve-cancer-mutations"}))
+            sys.exit(1)
+        print(_resolve_cancer_mutations(args.gene_name, args.tumor_site or "", args.max_results or 20))
+        return
+
+    if args.workflow == "resolve-snps":
+        if not args.region:
+            print(json.dumps({"error": "--region is required for resolve-snps"}))
+            sys.exit(1)
+        print(_resolve_snps(args.region, args.max_results or 50))
+        return
+
+    if args.workflow == "resolve-snp-impact":
+        if not args.rsid:
+            print(json.dumps({"error": "--rsid is required for resolve-snp-impact"}))
+            sys.exit(1)
+        print(_resolve_snp_impact(args.rsid))
         return
 
     if args.workflow == "status":
