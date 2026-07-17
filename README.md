@@ -1,6 +1,29 @@
 # deepbiology-lab
 
-Python client, CLI, MCP server, and Codex plugin for DeepBiology Lab.
+Python SDK, CLI, MCP server, and shared Codex, Gemini CLI, and Antigravity
+(AGY) agent skills for DeepBiology Lab.
+
+## Agent extensions
+
+The root `skills/` directory is the canonical source for thirteen DeepBiology
+skills shared by all supported agents. The Codex bundle is generated from that
+source; do not edit `codex-plugin-python/skills/` directly.
+
+Install the Gemini CLI extension:
+
+```bash
+gemini extensions install https://github.com/DeepBiology/deepbiology-lab --auto-update
+```
+
+Install the native AGY plugin:
+
+```bash
+agy plugin install https://github.com/DeepBiology/deepbiology-lab
+```
+
+Both local extensions require the `deepbiology-lab-mcp` executable provided by
+this Python package. See `extension/README.md` for configuration and development
+details.
 
 ## Quick install
 
@@ -49,7 +72,12 @@ Config is stored at:
 
 ```bash
 deepbiology-lab run q1 --gene-name CD34 --cell-line 195 --download-image --image-path cd34.png
+deepbiology-lab run q1 --gene-name CD34 --cell-name kasumi-1 --model borzoi_finetune_v1 --assay-type RNASeq
 ```
+
+When `--cell-name` is supplied, the CLI resolves `(model, assay type, cell
+name)` to the model's numeric output channel. `--assay-type` defaults to
+`RNASeq`; an explicit `--cell-line` index remains supported.
 
 By default the CLI prints the clean website-style JSON result. Use `--raw` to print the normalized raw API payload instead.
 
@@ -75,10 +103,41 @@ deepbiology-lab run q3 --gene-name CD34 --cell-line 195 --coordinate chr1:207923
 deepbiology-lab run q4 --gene-name CD34 --cell-line 195 --center 207923820 --flanking-size 75 --iterations 250 --download-image --image-path redesign.png
 ```
 
+## Resolve model channels and variants
+
+```bash
+deepbiology-lab resolve kasumi-1 --model borzoi_finetune_v1 --assay-type RNASeq
+deepbiology-lab snps region chr1:207923720-207923920 --assembly GRCh38 --max-results 50
+deepbiology-lab snps impact rs1053802528 --assembly GRCh38
+```
+
+## Download completed job artifacts
+
+```bash
+deepbiology-lab download <jobId>
+deepbiology-lab download <jobId> --download-image
+```
+
+The default result path is
+`deepbiology-experiments/run_<jobId>/result_<jobId>.json`. With
+`--download-image`, the image defaults to `result_<jobId>.png` in the same run
+directory. Codex, Gemini, and AGY expose the same behavior through the
+`deepbiology-download-result` skill and `download_job_result` MCP tool.
+
 ## Python usage
 
 ```python
 from deepbiology import DeepBiologyClient
+from deepbiology import annotate_variant, find_variants, resolve_cell_line
+
+resolution = resolve_cell_line(
+    "kasumi-1",
+    model_id="borzoi_finetune_v1",
+    assay_type="RNASeq",
+)
+
+regional_variants = find_variants("chr1:207923720-207923920", limit=50)
+vep = annotate_variant("rs1053802528")
 
 client = DeepBiologyClient(
     api_key="dbio_your_api_key_here",
@@ -183,7 +242,7 @@ The server checks these sources in order:
 This package also ships a [Codex](https://openai.com/codex/) plugin (boltz-compatible pattern)
 that gives Codex agents the ability to submit and track DeepBiology Lab workflows via skills.
 
-The plugin source is in the `codex-plugin/` directory of this repo.
+The plugin source is in the `codex-plugin-python/` directory of this repo.
 
 ### Skills
 
@@ -191,12 +250,17 @@ The plugin source is in the `codex-plugin/` directory of this repo.
 |-------|-------------|
 | `deepbiology-setup` | Install the CLI package and configure API key |
 | `deepbiology-resolve-gene` | Resolve gene names/aliases to HGNC symbols |
+| `deepbiology-resolve-cell-line` | Resolve model- and assay-specific output-channel indices |
+| `deepbiology-list-models` | List supported model catalogs |
+| `deepbiology-resolve-snps` | Find regional variants and annotate rsIDs with VEP |
+| `deepbiology-cancer-mutations` | Query aggregated cancer-mutation annotations |
 | `deepbiology-q1-regulation` | Submit Q1 — transcription gradient analysis |
 | `deepbiology-q2-enhancer-importance` | Submit Q2 — enhancer mutation importance scan |
 | `deepbiology-q3-mutation-impact` | Submit Q3 — mutated sequence impact evaluation |
 | `deepbiology-q4-enhancer-redesign` | Submit Q4 — AI-driven enhancer optimization |
 | `deepbiology-check-status` | Check the status of a submitted job |
 | `deepbiology-get-result` | Retrieve completed job results |
+| `deepbiology-download-result` | Save result JSON and optional image artifacts locally |
 
 ### How to install
 
@@ -221,27 +285,30 @@ codex --plugin-dir ./codex-plugin-python
 
 ### Architecture
 
-Each skill (`SKILL.md`) instructs the Codex agent to call a shared Python wrapper
-script (`scripts/query.py`) that handles submission, polling, result formatting,
-and image downloads via the `DeepBiologyClient`.
+The canonical skills instruct Codex, Gemini, and AGY to call the shared MCP
+tools. The MCP server delegates model catalogs, cell-line resolution, and
+variant annotation to the SDK. The Codex-only `scripts/query.py` wrapper remains
+available as a compatibility fallback for installations that do not load MCP.
 
 ```mermaid
 flowchart LR
     A[User prompt] --> B[Codex agent]
     B --> C{Which skill?}
     C --> D[SKILL.md instructions]
-    D --> E[python scripts/query.py]
+    D --> E[deepbiology-lab-mcp]
+    D -. compatibility fallback .-> H[python scripts/query.py]
     E --> F[DeepBiologyClient]
+    H --> F
     F --> G[DeepBiology API]
 ```
 
 ### Expanding the plugin
 
 To add a new skill:
-1. Create a new directory under `codex-plugin-python/skills/` with a `SKILL.md`
+1. Create a new directory under the canonical `skills/` tree with a `SKILL.md`
 2. Add the workflow logic to `codex-plugin-python/scripts/query.py` (if a new workflow type)
-3. Register the skill in the plugin manifest
-4. That's it — Codex picks it up on next load
+3. Run `python scripts/sync_plugin_skills.py`
+4. Add or update the shared MCP tool and tests as needed
 
 To add a new alias to the gene resolver:
 1. Edit `CURATED_ALIASES` in `codex-plugin-python/scripts/query.py`
@@ -251,5 +318,5 @@ To add a new alias to the gene resolver:
 
 - Package name: `deepbiology-lab`
 - Console scripts: `deepbiology-lab` (CLI), `deepbiology-lab-mcp` (MCP server)
-- Codex plugin: `codex-plugin/` directory (install via `codex plugin marketplace add DeepBiology/deepbiology-lab`)
+- Codex plugin: `codex-plugin-python/` directory (install via `codex plugin marketplace add DeepBiology/deepbiology-lab`)
 - Importable Python client remains available as `deepbiology`

@@ -172,97 +172,49 @@ def _resolve_gene(query: str) -> str:
 
 # ── Workflow: resolve-cell-line ────────────────────────────────────
 
-def _resolve_cell_line(query: str) -> str:
-    canonical = re.sub(r"[^a-zA-Z0-9]", "", query.strip()).upper()
-    return json.dumps({
-        "matched": bool(canonical),
-        "canonicalName": canonical if canonical else None,
-        "original": query,
-        "resolvedVia": "normalization",
-    })
+def _sdk_json(function_name: str, *args, **kwargs) -> str:
+    """Call one of the shared SDK resolution helpers and serialize its result."""
+    try:
+        import deepbiology
+    except ImportError:
+        return json.dumps({"error": "deepbiology package not installed. Run: pip install deepbiology-lab"})
+    try:
+        result = getattr(deepbiology, function_name)(*args, **kwargs)
+    except AttributeError:
+        return json.dumps({
+            "error": "Installed deepbiology-lab SDK is too old for '{}'. Upgrade to deepbiology-lab>=0.2.0.".format(function_name)
+        })
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+    return json.dumps(result, indent=2, default=str)
+
+
+def _resolve_cell_line(
+    query: str,
+    model_id: str = "borzoi_finetune_v1",
+    assay_type: str = "RNASeq",
+) -> str:
+    return _sdk_json(
+        "resolve_cell_line",
+        query,
+        model_id=model_id,
+        assay_type=assay_type,
+    )
 
 
 # ── Workflow: resolve-snps ────────────────────────────────────────
 
-ENSEMBL_BASE = "https://rest.ensembl.org"
+def _resolve_snps(region: str, max_results: int = 50, assembly: str = "GRCh38") -> str:
+    return _sdk_json(
+        "find_variants",
+        region,
+        assembly=assembly,
+        limit=max_results,
+    )
 
 
-def _resolve_snps(region: str, max_results: int = 50) -> str:
-    """Query Ensembl REST API for variants in a region."""
-    import json as _json
-    import urllib.request, urllib.error
-
-    region_clean = region.replace("chr", "").replace("CHR", "").strip()
-    url = f"{ENSEMBL_BASE}/overlap/region/human/{region_clean}?feature=variation"
-    if max_results > 0:
-        url += f";size={min(max_results, 200)}"
-
-    try:
-        req = urllib.request.Request(url, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = _json.loads(resp.read())
-    except Exception as e:
-        return _json.dumps({"error": f"Failed to query Ensembl: {str(e)}", "region": region})
-
-    results = []
-    for v in data:
-        results.append({
-            "rsid": v.get("id"),
-            "chromosome": v.get("seq_region_name"),
-            "start": v.get("start"),
-            "end": v.get("end"),
-            "alleles": v.get("allele_string"),
-            "variant_class": v.get("variant_class", ""),
-            "clinical_significance": v.get("clinical_significance", []),
-        })
-
-    return _json.dumps({
-        "region": region,
-        "genome_build": "hg38",
-        "count": len(results),
-        "variants": results,
-    }, indent=2)
-
-
-def _resolve_snp_impact(rsid: str) -> str:
-    """Query Ensembl VEP for a specific rsID."""
-    import json as _json
-    import urllib.request, urllib.error
-
-    rsid = rsid.strip()
-    if not rsid.startswith("rs"):
-        rsid = f"rs{rsid}"
-
-    url = f"{ENSEMBL_BASE}/vep/human/id/{rsid}"
-    try:
-        req = urllib.request.Request(url, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = _json.loads(resp.read())
-    except Exception as e:
-        return _json.dumps({"error": f"Failed to query Ensembl VEP: {str(e)}", "rsid": rsid})
-
-    result = {"rsid": rsid, "genes": []}
-    for item in data:
-        result["location"] = f"{item.get('seq_region_name')}:{item.get('start')}"
-        result["allele_string"] = item.get("allele_string", "")
-        result["most_severe_consequence"] = item.get("most_severe_consequence", "")
-        for tc in item.get("transcript_consequences", []):
-            result["genes"].append({
-                "gene_symbol": tc.get("gene_symbol", ""),
-                "gene_id": tc.get("gene_id", ""),
-                "impact": tc.get("impact", ""),
-                "consequence_terms": tc.get("consequence_terms", []),
-                "biotype": tc.get("biotype", ""),
-            })
-        for ic in item.get("intergenic_consequences", []):
-            result["genes"].append({
-                "gene_symbol": ic.get("gene_symbol", ""),
-                "impact": "INTERGENIC",
-                "consequence_terms": ["intergenic_variant"],
-                "distance": ic.get("distance", ""),
-            })
-
-    return _json.dumps(result, indent=2)
+def _resolve_snp_impact(rsid: str, assembly: str = "GRCh38") -> str:
+    return _sdk_json("annotate_variant", rsid, assembly=assembly)
 
 
 # ── Workflow: resolve-cancer-mutations ────────────────────────────
@@ -394,7 +346,11 @@ def _build_inputs(workflow: str, args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
-def _submit_and_wait(workflow_key: str, inputs: Dict[str, Any]) -> str:
+def _submit_and_wait(
+    workflow_key: str,
+    inputs: Dict[str, Any],
+    cell_line_resolution: Optional[Dict[str, Any]] = None,
+) -> str:
     """Submit job, poll to completion, return clean result."""
     try:
         from deepbiology import DeepBiologyClient
@@ -419,6 +375,8 @@ def _submit_and_wait(workflow_key: str, inputs: Dict[str, Any]) -> str:
     # Result
     raw = client.get_job_result(job_id)
     clean = client.format_clean_result(raw)
+    if cell_line_resolution:
+        clean["cellLineResolution"] = cell_line_resolution
 
     # Download image if available
     image = clean.get("image", {})
@@ -469,20 +427,57 @@ def _get_result(job_id: str) -> str:
     return json.dumps(clean, indent=2, default=str)
 
 
+def _download_result(
+    job_id: str,
+    output_directory: str = "deepbiology-experiments",
+    run_name: Optional[str] = None,
+    raw: bool = False,
+    download_image: bool = False,
+    image_path: Optional[str] = None,
+    poll_seconds: int = 5,
+    timeout_seconds: int = 1800,
+) -> str:
+    try:
+        from deepbiology import DeepBiologyClient
+    except ImportError:
+        return json.dumps({"error": "deepbiology package not installed"})
+    api_key = _load_api_key()
+    base_url = _load_base_url()
+    client = DeepBiologyClient(api_key=api_key, base_url=base_url)
+    downloaded = client.download_job_result(
+        job_id,
+        output_directory=output_directory,
+        run_name=run_name,
+        raw=raw,
+        download_image=download_image,
+        image_path=image_path,
+        poll_seconds=poll_seconds,
+        timeout_seconds=timeout_seconds,
+    )
+    artifact_summary = {
+        key: value for key, value in downloaded.items() if key != "result"
+    }
+    return json.dumps(artifact_summary, indent=2, default=str)
+
+
 # ── Main ───────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="DeepBiology Lab — Codex wrapper")
     parser.add_argument("--workflow", required=True,
-                        choices=["resolve-gene", "resolve-cell-line", "resolve-snps", "resolve-snp-impact", "resolve-cancer-mutations", "list-models", "q1", "q2", "q3", "q4", "status", "result"])
+                        choices=["resolve-gene", "resolve-cell-line", "resolve-snps", "resolve-snp-impact", "resolve-cancer-mutations", "list-models", "q1", "q2", "q3", "q4", "status", "result", "download"])
     parser.add_argument("--query", help="Gene name/alias for resolve-gene; or cell line for resolve-cell-line")
     parser.add_argument("--region", help="Genomic region (e.g. chr1:207923720-207923920) for resolve-snps")
     parser.add_argument("--rsid", help="dbSNP rsID (e.g. rs1053802528) for resolve-snp-impact")
+    parser.add_argument("--assembly", default="GRCh38", help="Genome assembly for SNP workflows (default: GRCh38)")
     parser.add_argument("--tumor-site", default="", help="Tumor site filter for resolve-cancer-mutations (e.g. lung, breast, pancreas)")
     parser.add_argument("--max-results", type=int, default=50, help="Max results (for resolve-snps or resolve-cancer-mutations)")
     parser.add_argument("--job-id", help="Job ID for status/result workflows")
     parser.add_argument("--gene-name", help="HGNC gene symbol")
     parser.add_argument("--cell-line", default="195")
+    parser.add_argument("--cell-name", help="Cell line name to resolve to a model output-channel index")
+    parser.add_argument("--model", default="borzoi_finetune_v1", help="Model ID for cell-line resolution")
+    parser.add_argument("--assay-type", default="RNASeq", help="Assay type for cell-line resolution")
     parser.add_argument("--mode", default="medium", choices=["fast", "medium", "high"])
     parser.add_argument("--notes", default="")
     parser.add_argument("--coordinate", help="Genomic coordinate (e.g. chr1:207923783-207923857)")
@@ -490,12 +485,24 @@ def main() -> None:
     parser.add_argument("--ref", default="", help="Reference sequence (for Q3)")
     parser.add_argument("--tf", default="", help="Transcription factor (for Q3)")
     parser.add_argument("--chip-seq-factor", default="SRR3082397", help="ChIP-seq factor for peak overlap (for Q1)")
-    parser.add_argument("--check-overlap", type=bool, default=True, help="Filter by ChIP-seq peak overlap (for Q1)")
+    parser.add_argument(
+        "--check-overlap",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable or disable peak-overlap filtering (for Q1)",
+    )
     parser.add_argument("--top-n", type=int, default=3, help="Number of top enhancer candidates (for Q1)")
     parser.add_argument("--center", type=int, help="Center coordinate (for Q4)")
     parser.add_argument("--flanking-size", type=int, default=75, help="Flanking size in bp (for Q4)")
     parser.add_argument("--iterations", type=int, default=250, help="Optimization iterations (for Q4)")
     parser.add_argument("--max-runtime-hours", type=int, default=24, help="Maximum runtime in hours (for Q4)")
+    parser.add_argument("--output", default="deepbiology-experiments", help="Parent output directory for download")
+    parser.add_argument("--run-name", help="Download subfolder name (default: run_<jobId>)")
+    parser.add_argument("--raw", action="store_true", help="Save the normalized raw result")
+    parser.add_argument("--download-image", action="store_true", help="Also download the result image")
+    parser.add_argument("--image-path", help="Custom result image path")
+    parser.add_argument("--poll-seconds", type=int, default=5, help="Download polling interval")
+    parser.add_argument("--timeout-seconds", type=int, default=1800, help="Download wait timeout")
 
     args = parser.parse_args()
 
@@ -510,29 +517,11 @@ def main() -> None:
         if not args.query:
             print(json.dumps({"error": "--query is required for resolve-cell-line"}))
             sys.exit(1)
-        print(_resolve_cell_line(args.query))
+        print(_resolve_cell_line(args.query, args.model, args.assay_type))
         return
 
     if args.workflow == "list-models":
-        models = [
-            {
-                "id": "borzoi_finetune_v1",
-                "name": "Borzoi Fine-tune v1",
-                "description": "Production model trained on ChIP-seq, Gro-seq, and RNA-seq data",
-                "supportedWorkflows": ["q1_regulation", "q2_enhancer_importance", "q3_mutation_impact", "q4_enhancer_redesign"],
-                "catalog": "samplefile_w_anno_for_chipseq_with6cols.csv",
-                "cellLines": "785 cell lines from ChIP-seq/Gro-seq/RNA-seq experiments",
-            },
-            {
-                "id": "borzoi_finetune_ccle_v1",
-                "name": "Borzoi Fine-tune CCLE v1",
-                "description": "CCLE-trained model covering 1019 cancer cell lines",
-                "supportedWorkflows": ["q1_regulation", "q2_enhancer_importance", "q3_mutation_impact", "q4_enhancer_redesign"],
-                "catalog": "samplefile_annotated_ccle_new.csv",
-                "cellLines": "1019 cancer cell lines from CCLE",
-            },
-        ]
-        print(json.dumps(models, indent=2))
+        print(_sdk_json("list_models"))
         return
 
     if args.workflow == "resolve-cancer-mutations":
@@ -546,14 +535,14 @@ def main() -> None:
         if not args.region:
             print(json.dumps({"error": "--region is required for resolve-snps"}))
             sys.exit(1)
-        print(_resolve_snps(args.region, args.max_results or 50))
+        print(_resolve_snps(args.region, args.max_results or 50, args.assembly))
         return
 
     if args.workflow == "resolve-snp-impact":
         if not args.rsid:
             print(json.dumps({"error": "--rsid is required for resolve-snp-impact"}))
             sys.exit(1)
-        print(_resolve_snp_impact(args.rsid))
+        print(_resolve_snp_impact(args.rsid, args.assembly))
         return
 
     if args.workflow == "status":
@@ -570,13 +559,37 @@ def main() -> None:
         print(_get_result(args.job_id))
         return
 
+    if args.workflow == "download":
+        if not args.job_id:
+            print(json.dumps({"error": "--job-id is required for download"}))
+            sys.exit(1)
+        print(_download_result(
+            args.job_id,
+            output_directory=args.output,
+            run_name=args.run_name,
+            raw=args.raw,
+            download_image=args.download_image,
+            image_path=args.image_path,
+            poll_seconds=args.poll_seconds,
+            timeout_seconds=args.timeout_seconds,
+        ))
+        return
+
     # q1-q4
     if not args.gene_name:
         print(json.dumps({"error": "--gene-name is required"}))
         sys.exit(1)
+    cell_line_resolution = None
+    if args.cell_name:
+        resolved_payload = _resolve_cell_line(args.cell_name, args.model, args.assay_type)
+        cell_line_resolution = json.loads(resolved_payload)
+        if cell_line_resolution.get("error"):
+            print(resolved_payload)
+            sys.exit(1)
+        args.cell_line = str(cell_line_resolution["cellLineIndex"])
     workflow_key = WORKFLOW_MAP[args.workflow]
     inputs = _build_inputs(workflow_key, args)
-    print(_submit_and_wait(workflow_key, inputs))
+    print(_submit_and_wait(workflow_key, inputs, cell_line_resolution))
 
 
 if __name__ == "__main__":

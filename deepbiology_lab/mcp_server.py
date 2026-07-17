@@ -28,7 +28,15 @@ from dataclasses import dataclass
 
 from mcp.server.fastmcp import FastMCP
 
-from deepbiology import DeepBiologyClient
+from deepbiology import (
+    DEFAULT_ASSAY_TYPE,
+    DEFAULT_MODEL_ID,
+    DeepBiologyClient,
+    annotate_variant as sdk_annotate_variant,
+    find_variants as sdk_find_variants,
+    list_models as sdk_list_models,
+    resolve_cell_line as sdk_resolve_cell_line,
+)
 from deepbiology_lab.config import DEFAULT_BASE_URL, load_config
 
 # ── MCP Server ─────────────────────────────────────────────────────
@@ -246,156 +254,72 @@ def resolve_gene(query: str) -> str:
 
 # ── Tool: resolve_cell_line ───────────────────────────────────────
 
-@server.tool(description="Resolve a cell line name/alias to its canonical identifier by normalizing hyphens, spaces, and casing")
-def resolve_cell_line(query: str) -> str:
+@server.tool(description="Resolve a cell-line name to the output-channel index for a DeepBiology model and assay")
+def resolve_cell_line(
+    cell_name: str,
+    model_id: str = DEFAULT_MODEL_ID,
+    assay_type: str = DEFAULT_ASSAY_TYPE,
+) -> str:
     """
-    Resolve a cell line name to its canonical form.
-
-    Normalizes by stripping all non-alphanumeric characters (hyphens,
-    spaces, dots, underscores) and uppercasing. For example:
-      "kasumi-1" -> "KASUMI1"
-      "Kasumi 1" -> "KASUMI1"
-      "sk-mel-28" -> "SKMEL28"
-      "NCI-H1781" -> "NCIH1781"
-      "ls-513" -> "LS513"
+    Resolve a cell line against a model metadata catalog. Resolution is
+    model- and assay-specific; RNASeq is the default assay.
 
     Args:
-        query: Cell line name (e.g. "kasumi-1", "SK-MEL-28", "K562")
+        cell_name: Cell line name (e.g. "kasumi-1", "SK-MEL-28", "K562")
+        model_id: DeepBiology model catalog identifier
+        assay_type: Assay represented by the requested output channel
 
     Returns:
-        JSON with the canonical cell line name.
+        JSON with canonical name, matched catalog row, and numeric channel.
     """
-    import re
-    canonical = re.sub(r"[^a-zA-Z0-9]", "", query.strip()).upper()
-    return json.dumps({
-        "matched": bool(canonical),
-        "canonicalName": canonical if canonical else None,
-        "original": query,
-        "resolvedVia": "normalization",
-    })
+    return json.dumps(
+        sdk_resolve_cell_line(
+            cell_name,
+            model_id=model_id,
+            assay_type=assay_type,
+        ),
+        indent=2,
+    )
 
 
-# ── Tool: resolve_snps ────────────────────────────────────────────
+# ── Tools: variants ───────────────────────────────────────────────
 
-ENSEMBL_BASE = "https://rest.ensembl.org"
+@server.tool(description="Find known Ensembl variants within a GRCh38/hg38 or GRCh37/hg19 genomic region")
+def find_variants(
+    region: str,
+    assembly: str = "GRCh38",
+    limit: int = 50,
+) -> str:
+    """Query regional variants through the shared DeepBiology SDK."""
+    return json.dumps(
+        sdk_find_variants(region, assembly=assembly, limit=limit),
+        indent=2,
+    )
 
 
-@server.tool(description="Query SNPs within a genomic coordinate range (hg38) via Ensembl")
+@server.tool(description="Annotate a dbSNP rsID with Ensembl VEP transcript, regulatory, and intergenic consequences")
+def annotate_variant(variant_id: str, assembly: str = "GRCh38") -> str:
+    """Run Ensembl VEP annotation through the shared DeepBiology SDK."""
+    return json.dumps(
+        sdk_annotate_variant(variant_id, assembly=assembly),
+        indent=2,
+    )
+
+
+@server.tool(description="Deprecated alias for find_variants; query known variants in a genomic region")
 def resolve_snps(
     region: str,
     genome_build: str = "hg38",
     max_results: int = 50,
 ) -> str:
-    """
-    Query known SNPs/variants within a genomic coordinate range using
-    the Ensembl REST API (hg38/GRCh38).
-
-    Args:
-        region: Genomic region in the format "chr:start-end" (e.g. "1:207923720-207923920")
-        genome_build: Genome build (default "hg38"; "hg19" not supported by this endpoint)
-        max_results: Maximum number of results to return (default 50, max 200)
-
-    Returns:
-        JSON array of variants with rsID, position, alleles, and type.
-    """
-    import json as _json
-    import urllib.request
-    import urllib.error
-
-    # Normalize region: strip "chr" prefix, split on : and -
-    region_clean = region.replace("chr", "").replace("CHR", "").strip()
-    url = f"{ENSEMBL_BASE}/overlap/region/human/{region_clean}?feature=variation"
-    if max_results and max_results > 0:
-        url += f";size={min(max_results, 200)}"
-
-    req = urllib.request.Request(url, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = _json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        return _json.dumps({"error": f"Ensembl API error: {e.code} {e.reason}", "region": region})
-    except Exception as e:
-        return _json.dumps({"error": f"Failed to query Ensembl: {str(e)}", "region": region})
-
-    results = []
-    for v in data:
-        results.append({
-            "rsid": v.get("id"),
-            "chromosome": v.get("seq_region_name"),
-            "start": v.get("start"),
-            "end": v.get("end"),
-            "alleles": v.get("allele_string"),
-            "variant_class": v.get("variant_class", ""),
-            "clinical_significance": v.get("clinical_significance", []),
-        })
-
-    return _json.dumps({
-        "region": region,
-        "genome_build": genome_build,
-        "count": len(results),
-        "variants": results,
-    }, indent=2)
+    """Compatibility alias retained for existing MCP clients."""
+    return find_variants(region=region, assembly=genome_build, limit=max_results)
 
 
-# ── Tool: resolve_snp_impact ──────────────────────────────────────
-
-@server.tool(description="Look up a specific SNP (rsID) and its predicted impact on nearby genes via Ensembl VEP")
-def resolve_snp_impact(rsid: str) -> str:
-    """
-    Look up a specific SNP by its rsID and get its predicted functional
-    impact on nearby genes using the Ensembl VEP (Variant Effect Predictor).
-
-    Args:
-        rsid: The dbSNP rsID (e.g. "rs1053802528", "rs1405746147")
-
-    Returns:
-        JSON with gene-level consequences, impact severity, and variant location.
-    """
-    import json as _json
-    import urllib.request
-    import urllib.error
-
-    # Normalize rsID
-    rsid = rsid.strip()
-    if not rsid.startswith("rs"):
-        rsid = f"rs{rsid}"
-
-    url = f"{ENSEMBL_BASE}/vep/human/id/{rsid}"
-    req = urllib.request.Request(url, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = _json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        return _json.dumps({"error": f"Ensembl VEP error: {e.code} {e.reason}", "rsid": rsid})
-    except Exception as e:
-        return _json.dumps({"error": f"Failed to query Ensembl VEP: {str(e)}", "rsid": rsid})
-
-    result = {"rsid": rsid, "genes": []}
-
-    for item in data:
-        result["location"] = f"{item.get('seq_region_name')}:{item.get('start')}"
-        result["allele_string"] = item.get("allele_string", "")
-        result["most_severe_consequence"] = item.get("most_severe_consequence", "")
-
-        for tc in item.get("transcript_consequences", []):
-            result["genes"].append({
-                "gene_symbol": tc.get("gene_symbol", ""),
-                "gene_id": tc.get("gene_id", ""),
-                "impact": tc.get("impact", ""),
-                "consequence_terms": tc.get("consequence_terms", []),
-                "biotype": tc.get("biotype", ""),
-                "strand": tc.get("strand"),
-            })
-
-        for ic in item.get("intergenic_consequences", []):
-            result["genes"].append({
-                "gene_symbol": ic.get("gene_symbol", ""),
-                "impact": "INTERGENIC",
-                "consequence_terms": ["intergenic_variant"],
-                "distance": ic.get("distance", ""),
-            })
-
-    return _json.dumps(result, indent=2)
+@server.tool(description="Deprecated alias for annotate_variant; annotate an rsID with Ensembl VEP")
+def resolve_snp_impact(rsid: str, genome_build: str = "hg38") -> str:
+    """Compatibility alias retained for existing MCP clients."""
+    return annotate_variant(variant_id=rsid, assembly=genome_build)
 
 
 # ── Tool: resolve_cancer_mutations ────────────────────────────────
@@ -474,12 +398,33 @@ def resolve_cancer_mutations(
     }, indent=2)
 
 
-# ── Shared: Build inputs + submit ─────────────────────────────────
+# ── Shared: Resolve channels + submit ─────────────────────────────
 
-def _submit(workflow_key: str, inputs: Dict[str, Any]) -> str:
+def _resolve_workflow_cell(
+    cell_line: str,
+    cell_name: str,
+    model_id: str,
+    assay_type: str,
+) -> tuple[str, Optional[Dict[str, Any]]]:
+    """Resolve a named cell or preserve an explicit output-channel index."""
+    if not cell_name:
+        return str(cell_line), None
+    resolution = sdk_resolve_cell_line(
+        cell_name,
+        model_id=model_id,
+        assay_type=assay_type,
+    )
+    return str(resolution["cellLineIndex"]), resolution
+
+
+def _submit(
+    workflow_key: str,
+    inputs: Dict[str, Any],
+    cell_line_resolution: Optional[Dict[str, Any]] = None,
+) -> str:
     client = _get_client()
     job = client.submit_job(workflow=workflow_key, inputs=inputs)
-    return json.dumps({
+    response = {
         "jobId": job.get("jobId"),
         "status": job.get("status", "submitted"),
         "submissionId": job.get("submissionId"),
@@ -489,7 +434,10 @@ def _submit(workflow_key: str, inputs: Dict[str, Any]) -> str:
         "question": workflow_key,
         "task": inputs.get("task"),
         "message": "Job submitted successfully. Use get_job_status and get_job_result to track progress.",
-    }, indent=2)
+    }
+    if cell_line_resolution:
+        response["cellLineResolution"] = cell_line_resolution
+    return json.dumps(response, indent=2)
 
 
 # ── Tool: submit_q1_regulation ────────────────────────────────────
@@ -498,6 +446,9 @@ def _submit(workflow_key: str, inputs: Dict[str, Any]) -> str:
 def submit_q1_regulation(
     gene_name: str,
     cell_line: str = "195",
+    cell_name: str = "",
+    model_id: str = DEFAULT_MODEL_ID,
+    assay_type: str = DEFAULT_ASSAY_TYPE,
     mode: str = "medium",
     chip_seq_factor: str = "SRR3082397",
     check_overlap: bool = True,
@@ -516,7 +467,10 @@ def submit_q1_regulation(
 
     Args:
         gene_name: Official HGNC gene symbol (e.g. "CD34", "CCND1", "MYC")
-        cell_line: Cell line identifier (default "195")
+        cell_line: Explicit output-channel index (default "195")
+        cell_name: Cell-line name to resolve instead of using cell_line
+        model_id: Model catalog used for cell-name resolution
+        assay_type: Assay used for cell-name resolution (default RNASeq)
         mode: Analysis mode ("fast", "medium", or "high")
         chip_seq_factor: ChIP-seq factor for peak overlap filtering (default "SRR3082397"; AML-specific)
         check_overlap: Filter enhancers by ChIP-seq peak overlap (default True; set False for non-AML cells)
@@ -526,21 +480,24 @@ def submit_q1_regulation(
     Returns:
         JSON with job ID for tracking.
     """
+    resolved_cell_line, resolution = _resolve_workflow_cell(
+        cell_line, cell_name, model_id, assay_type
+    )
     sequence = (
-        f"task=plot_transcription_gradient;gene={gene_name};cell_line={cell_line};"
+        f"task=plot_transcription_gradient;gene={gene_name};cell_line={resolved_cell_line};"
         f"chip_seq_factor={chip_seq_factor};top_n={top_n};check_overlap={str(check_overlap).lower()}"
     )
     return _submit("q1_regulation", {
         "task": "plot_transcription_gradient",
         "gene_name": gene_name,
-        "cell_line": cell_line,
+        "cell_line": resolved_cell_line,
         "chip_seq_factor": chip_seq_factor,
         "check_overlap": check_overlap,
         "top_n": top_n,
         "mode": mode,
         "notes": notes or f"Submitted via MCP: Q1 regulation for {gene_name}",
         "sequence": sequence,
-    })
+    }, resolution)
 
 
 # ── Tool: submit_q2_enhancer_importance ───────────────────────────
@@ -549,6 +506,9 @@ def submit_q1_regulation(
 def submit_q2_enhancer_importance(
     gene_name: str,
     cell_line: str = "195",
+    cell_name: str = "",
+    model_id: str = DEFAULT_MODEL_ID,
+    assay_type: str = DEFAULT_ASSAY_TYPE,
     coordinate: str = "chr1:207923783-207923857",
     mode: str = "medium",
     notes: str = "",
@@ -559,7 +519,10 @@ def submit_q2_enhancer_importance(
 
     Args:
         gene_name: Official HGNC gene symbol
-        cell_line: Cell line identifier (default "195")
+        cell_line: Explicit output-channel index (default "195")
+        cell_name: Cell-line name to resolve instead of using cell_line
+        model_id: Model catalog used for cell-name resolution
+        assay_type: Assay used for cell-name resolution (default RNASeq)
         coordinate: Genomic coordinate (e.g. "chr1:207923783-207923857")
         mode: Analysis mode ("fast", "medium", or "high")
         notes: Optional notes or description
@@ -567,18 +530,21 @@ def submit_q2_enhancer_importance(
     Returns:
         JSON with job ID for tracking.
     """
-    sequence = f"task=mutation;coordinate={coordinate};mutatedSeq=N;gene={gene_name};cell_line={cell_line}"
+    resolved_cell_line, resolution = _resolve_workflow_cell(
+        cell_line, cell_name, model_id, assay_type
+    )
+    sequence = f"task=mutation;coordinate={coordinate};mutatedSeq=N;gene={gene_name};cell_line={resolved_cell_line}"
     return _submit("q2_enhancer_importance", {
         "task": "mutation",
         "gene_name": gene_name,
-        "cell_line": cell_line,
+        "cell_line": resolved_cell_line,
         "coordinate": coordinate,
         "mutatedSeq": "N",
         "loci": coordinate,
         "mode": mode,
         "notes": notes or f"Submitted via MCP: Q2 enhancer importance for {gene_name} at {coordinate}",
         "sequence": sequence,
-    })
+    }, resolution)
 
 
 # ── Tool: submit_q3_mutation_impact ───────────────────────────────
@@ -589,6 +555,9 @@ def submit_q3_mutation_impact(
     coordinate: str,
     mutated_seq: str,
     cell_line: str = "195",
+    cell_name: str = "",
+    model_id: str = DEFAULT_MODEL_ID,
+    assay_type: str = DEFAULT_ASSAY_TYPE,
     ref: str = "",
     tf: str = "",
     mode: str = "medium",
@@ -602,7 +571,10 @@ def submit_q3_mutation_impact(
         gene_name: Official HGNC gene symbol
         coordinate: Genomic coordinate (e.g. "chr1:207923783-207923857")
         mutated_seq: The mutated DNA sequence
-        cell_line: Cell line identifier (default "195")
+        cell_line: Explicit output-channel index (default "195")
+        cell_name: Cell-line name to resolve instead of using cell_line
+        model_id: Model catalog used for cell-name resolution
+        assay_type: Assay used for cell-name resolution (default RNASeq)
         ref: Optional reference sequence
         tf: Optional transcription factor to focus on
         mode: Analysis mode ("fast", "medium", or "high")
@@ -611,10 +583,13 @@ def submit_q3_mutation_impact(
     Returns:
         JSON with job ID for tracking.
     """
+    resolved_cell_line, resolution = _resolve_workflow_cell(
+        cell_line, cell_name, model_id, assay_type
+    )
     return _submit("q3_mutation_impact", {
         "task": "mutation",
         "gene_name": gene_name,
-        "cell_line": cell_line,
+        "cell_line": resolved_cell_line,
         "coordinate": coordinate,
         "mutatedSeq": mutated_seq,
         "mut": mutated_seq,
@@ -624,7 +599,7 @@ def submit_q3_mutation_impact(
         "mode": mode,
         "notes": notes or f"Submitted via MCP: Q3 mutation impact for {gene_name} at {coordinate}",
         "sequence": mutated_seq,
-    })
+    }, resolution)
 
 
 # ── Tool: submit_q4_enhancer_redesign ─────────────────────────────
@@ -633,6 +608,9 @@ def submit_q3_mutation_impact(
 def submit_q4_enhancer_redesign(
     gene_name: str,
     cell_line: str = "195",
+    cell_name: str = "",
+    model_id: str = DEFAULT_MODEL_ID,
+    assay_type: str = DEFAULT_ASSAY_TYPE,
     center: int = 207923820,
     flanking_size: int = 75,
     iterations: int = 250,
@@ -646,7 +624,10 @@ def submit_q4_enhancer_redesign(
 
     Args:
         gene_name: Official HGNC gene symbol
-        cell_line: Cell line identifier (default "195")
+        cell_line: Explicit output-channel index (default "195")
+        cell_name: Cell-line name to resolve instead of using cell_line
+        model_id: Model catalog used for cell-name resolution
+        assay_type: Assay used for cell-name resolution (default RNASeq)
         center: Center coordinate for the enhancer region (default 207923820)
         flanking_size: Flanking size in base pairs (default 75)
         iterations: Number of optimization iterations (default 250)
@@ -657,14 +638,17 @@ def submit_q4_enhancer_redesign(
     Returns:
         JSON with job ID for tracking.
     """
+    resolved_cell_line, resolution = _resolve_workflow_cell(
+        cell_line, cell_name, model_id, assay_type
+    )
     sequence = (
         f"task=enhancerOpt;center={center};flanking_size={flanking_size};"
-        f"iterations={iterations};gene={gene_name};cell_line={cell_line}"
+        f"iterations={iterations};gene={gene_name};cell_line={resolved_cell_line}"
     )
     return _submit("q4_enhancer_redesign", {
         "task": "enhancerOpt",
         "gene_name": gene_name,
-        "cell_line": cell_line,
+        "cell_line": resolved_cell_line,
         "center": center,
         "flanking_size": flanking_size,
         "iterations": iterations,
@@ -672,7 +656,7 @@ def submit_q4_enhancer_redesign(
         "mode": mode,
         "notes": notes or f"Submitted via MCP: Q4 enhancer redesign for {gene_name}",
         "sequence": sequence,
-    })
+    }, resolution)
 
 
 # ── Tool: get_job_status ──────────────────────────────────────────
@@ -723,6 +707,40 @@ def get_job_result(job_id: str) -> str:
     return json.dumps(clean, indent=2, default=str)
 
 
+@server.tool(description="Wait for a job and save its JSON result and optional image to local files")
+def download_job_result(
+    job_id: str,
+    output_directory: str = "deepbiology-experiments",
+    run_name: Optional[str] = None,
+    raw: bool = False,
+    download_image: bool = False,
+    image_path: Optional[str] = None,
+    poll_seconds: int = 5,
+    timeout_seconds: int = 1800,
+) -> str:
+    """Persist completed job artifacts on the machine running this MCP server.
+
+    By default, writes the result to
+    ``deepbiology-experiments/run_<jobId>/result_<jobId>.json``.
+    The optional image uses ``result_<jobId>.png`` in the same run directory.
+    """
+    client = _get_client()
+    downloaded = client.download_job_result(
+        job_id,
+        output_directory=output_directory,
+        run_name=run_name,
+        raw=raw,
+        download_image=download_image,
+        image_path=image_path,
+        poll_seconds=poll_seconds,
+        timeout_seconds=timeout_seconds,
+    )
+    artifact_summary = {
+        key: value for key, value in downloaded.items() if key != "result"
+    }
+    return json.dumps(artifact_summary, indent=2, default=str)
+
+
 # ── Tool: list_models ─────────────────────────────────────────────
 
 @server.tool(description="List available DeepBiology Lab models and their supported workflows")
@@ -733,25 +751,7 @@ def list_models() -> str:
     Returns:
         JSON array of models with id, name, description, and supported workflows.
     """
-    models = [
-        {
-            "id": "borzoi_finetune_v1",
-            "name": "Borzoi Fine-tune v1",
-            "description": "Production model trained on ChIP-seq, Gro-seq, and RNA-seq data",
-            "supportedWorkflows": ["q1_regulation", "q2_enhancer_importance", "q3_mutation_impact", "q4_enhancer_redesign"],
-            "catalog": "samplefile_w_anno_for_chipseq_with6cols.csv",
-            "cellLines": "785 cell lines from ChIP-seq/Gro-seq/RNA-seq experiments",
-        },
-        {
-            "id": "borzoi_finetune_ccle_v1",
-            "name": "Borzoi Fine-tune CCLE v1",
-            "description": "CCLE-trained model covering 1019 cancer cell lines",
-            "supportedWorkflows": ["q1_regulation", "q2_enhancer_importance", "q3_mutation_impact", "q4_enhancer_redesign"],
-            "catalog": "samplefile_annotated_ccle_new.csv",
-            "cellLines": "1019 cancer cell lines from CCLE",
-        },
-    ]
-    return json.dumps(models, indent=2)
+    return json.dumps(sdk_list_models(), indent=2)
 
 
 # ── Entry Point ───────────────────────────────────────────────────

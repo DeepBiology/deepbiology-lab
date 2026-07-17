@@ -1,0 +1,29 @@
+{
+  "name": "deepbiology-lab",
+  "version": "0.3.0",
+  "description": "Resolve genes, cell lines, and variants and run DeepBiology genomics workflows from Gemini CLI.",
+  "mcpServers": {
+    "deepbiology-lab": {
+      "command": "deepbiology-lab-mcp",
+      "env": {
+        "DEEPBIOLOGY_API_KEY": "$DEEPBIOLOGY_API_KEY",
+        "DEEPBIOLOGY_BASE_URL": "$DEEPBIOLOGY_BASE_URL"
+      },
+      "timeout": 1800000
+    }
+  },
+  "settings": [
+    {
+      "name": "DeepBiology API key",
+      "description": "API key used to submit and retrieve DeepBiology Lab jobs.",
+      "envVar": "DEEPBIOLOGY_API_KEY",
+      "sensitive": true
+    },
+    {
+      "name": "DeepBiology API base URL",
+      "description": "Optional API base URL; leave empty to use the production default.",
+      "envVar": "DEEPBIOLOGY_BASE_URL",
+      "sensitive": false
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "deepbiology-lab",
+  "description": "Shared DeepBiology genomics skills and MCP tools for Antigravity CLI."
+}
