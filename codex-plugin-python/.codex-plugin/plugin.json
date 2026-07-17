@@ -1,7 +1,7 @@
 {
   "name": "deepbiology",
-  "version": "0.1.0",
-  "description": "Codex plugin for DeepBiology Lab that gives agents workflows for gene regulation analysis, enhancer importance scanning, mutation impact evaluation, and enhancer redesign — plus gene alias resolution and job tracking.",
+  "version": "0.3.0",
+  "description": "Codex plugin for DeepBiology Lab with shared agent skills and MCP tools for model-aware genomics workflows.",
   "author": {
     "name": "DeepBiology",
     "email": "support@deepbiology.ai",
@@ -21,10 +21,11 @@
     "python-sdk"
   ],
   "skills": "./skills",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "DeepBiology Lab",
     "shortDescription": "Submit genomics research workflows to DeepBiology Lab from Codex.",
-    "longDescription": "Provides seven Codex skills for DeepBiology Lab: gene alias resolution, transcription gradient analysis (Q1), enhancer mutation importance scan (Q2), mutation impact analysis (Q3), AI-driven enhancer redesign (Q4), job status checking, and result retrieval. Each skill uses a shared Python wrapper to submit jobs, poll for completion, and format results so agents can run DeepBiology workflows end to end.",
+    "longDescription": "Provides thirteen shared agent skills and MCP tools for DeepBiology Lab, including model- and assay-aware cell-line resolution, gene and variant annotation, four genomics inference workflows (Q1-Q4), setup, model discovery, cancer-mutation lookup, job status, result retrieval, and local artifact downloads.",
     "developerName": "DeepBiology",
     "category": "Science",
     "capabilities": [
@@ -38,8 +39,7 @@
     "defaultPrompt": [
       "Analyze the transcription regulation of CCND1 in myeloid cell lines.",
       "Scan for important enhancer positions near the MYC gene.",
-      "What's the impact of this mutation on the CD34 enhancer region?",
-      "Redesign the enhancer around the BCL2 gene to optimize expression."
+      "What's the impact of this mutation on the CD34 enhancer region?"
     ]
   }
 }

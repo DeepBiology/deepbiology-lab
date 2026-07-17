@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "deepbiology-lab": {
+      "command": "deepbiology-lab-mcp"
+    }
+  }
+}

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import time
 import uuid
 from typing import Any, Dict, Optional, List
@@ -165,3 +167,47 @@ class DeepBiologyClient:
                 fh.write(response.content)
             return output_path
         raise NotFoundError("No result image available for this job")
+
+    def download_job_result(
+        self,
+        job_id: str,
+        output_directory: str = "deepbiology-experiments",
+        run_name: Optional[str] = None,
+        raw: bool = False,
+        download_image: bool = False,
+        image_path: Optional[str] = None,
+        poll_seconds: int = 5,
+        timeout_seconds: int = 1800,
+    ) -> Dict[str, Any]:
+        """Wait for a job and persist its result artifacts using the CLI layout."""
+        self.wait_for_job(
+            job_id,
+            poll_seconds=poll_seconds,
+            timeout_seconds=timeout_seconds,
+        )
+        normalized = self.get_job_result(job_id)
+        payload = normalized if raw else self.format_clean_result(normalized)
+
+        resolved_run_name = run_name or "run_{}".format(job_id)
+        run_directory = os.path.join(output_directory, resolved_run_name)
+        os.makedirs(run_directory, exist_ok=True)
+
+        result_file = os.path.join(run_directory, "result_{}.json".format(job_id))
+        with open(result_file, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+
+        downloaded_image = None
+        if download_image:
+            resolved_image_path = image_path or os.path.join(
+                run_directory, "result_{}.png".format(job_id)
+            )
+            downloaded_image = self.download_result_image(job_id, resolved_image_path)
+
+        return {
+            "jobId": job_id,
+            "runDirectory": run_directory,
+            "resultFile": result_file,
+            "imageFile": downloaded_image,
+            "raw": raw,
+            "result": payload,
+        }
