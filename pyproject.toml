@@ -12,7 +12,8 @@ authors = [{ name = "DeepBiology" }]
 urls = { repository = "https://github.com/DeepBiology/deepbiology-lab" }
 dependencies = [
   "requests>=2.31.0",
-  "mcp>=1.0.0",
+  "httpx>=0.28.1",
+  "mcp==1.28.1",
 ]
 
 [project.scripts]

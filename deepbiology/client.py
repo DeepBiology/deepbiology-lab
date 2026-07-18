@@ -19,6 +19,9 @@ class DeepBiologyClient:
         self.session = requests.Session()
         self.session.headers.update({"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
 
+    def __repr__(self) -> str:
+        return "DeepBiologyClient(api_key=<redacted>, base_url={!r})".format(self.base_url)
+
     @staticmethod
     def normalize_result_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         result = payload.get("result") or {}

@@ -182,9 +182,119 @@ export DEEPBIOLOGY_API_KEY=dbio_your_api_key_here
 deepbiology-lab-mcp
 ```
 
+The default transport remains local `stdio`, so existing Codex, Gemini CLI,
+AGY, Qwen, Claude Desktop, VS Code, and Cursor configurations do not need to
+change.
+
+For a multi-user deployment, start the server in stateless Streamable HTTP
+mode:
+
+```bash
+MCP_TRANSPORT=streamable-http MCP_HOST=0.0.0.0 PORT=8000 deepbiology-lab-mcp
+```
+
+The MCP endpoint is `/mcp`. Every HTTP message must include
+`Authorization: Bearer <DeepBiology API key>`. Credentials are validated by
+the DeepBiology backend for each HTTP message and are used only in that
+request's authentication context; they are not copied into process
+environment variables or server/session state. `PORT` takes precedence over
+`MCP_PORT`, with `8000` as the default. `MCP_HOST` defaults to `0.0.0.0`.
+
+HTTP mode returns JSON responses, which are supported by the MCP 1.28.1
+Streamable HTTP client. The server is stateless, so clients must send the
+Bearer header on every message. The `download_job_result` tool returns result
+data and its signed image URL inline in HTTP mode. Remote callers cannot
+select server filesystem paths or request server-side image downloads; its
+existing local-file behavior is unchanged in `stdio` mode.
+
+Synchronous tool implementations are executed in a bounded worker pool in
+HTTP mode so slow backend or public-API calls do not block unrelated HTTP
+requests. Stdio continues to execute the original synchronous tools directly.
+If the DeepBiology authentication backend cannot be reached, the HTTP server
+returns a sanitized `503 Service Unavailable`; missing or invalid credentials
+continue to return `401 Unauthorized`.
+
+The dedicated executor is intentional. During development,
+`anyio.to_thread.run_sync()` propagated request context correctly in isolation
+but intermittently stalled during nested MCP/ASGI execution in this runtime.
+The cause remains unresolved and runtime-specific; it is not considered a
+confirmed AnyIO or MCP SDK defect. The executor explicitly copies the current
+request context into workers and is closed during ASGI lifespan shutdown.
+
+### Docker deployment with HTTPS
+
+The repository includes a production-oriented Docker Compose deployment for a
+headless Ubuntu 24.04 VM. The MCP application listens on `0.0.0.0:8000` inside
+Docker, but that port is never published on the host. Caddy is the only public
+service: it obtains and renews the TLS certificate, redirects port 80 to HTTPS,
+and forwards `https://<hostname>/mcp` from port 443 over the Docker network.
+
+Prerequisites:
+
+- A DNS `A`/`AAAA` record for the MCP hostname pointing to the VM.
+- Docker Engine and the Docker Compose plugin installed on the VM.
+- Cloud firewall and host firewall access for TCP 80 and TCP/UDP 443. Do not
+  open port 8000.
+- No other service using host ports 80 or 443.
+
+Create the local deployment environment from the non-secret example and set
+the bare DNS hostname:
+
+```bash
+cp .env.example .env
+sed -i 's/mcp.example.com/mcp.your-domain.example/' .env
+```
+
+Do not add `DEEPBIOLOGY_API_KEY` to `.env`, Compose, or the container. Every
+remote user supplies a separate key in the `Authorization: Bearer <key>`
+header on every MCP message. `DEEPBIOLOGY_BASE_URL` is the only optional
+DeepBiology setting in `.env`; leaving it empty selects the production backend.
+
+Build and start the deployment:
+
+```bash
+docker compose config --quiet
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=100 mcp caddy
+```
+
+Once DNS and certificate issuance have completed, an unauthenticated request
+should be rejected by the MCP application rather than by the proxy:
+
+```bash
+curl -i https://mcp.your-domain.example/mcp
+```
+
+The expected status is `401 Unauthorized`. Configure remote MCP clients with
+the URL `https://mcp.your-domain.example/mcp` and their own Bearer header.
+Requests to other paths return `404`.
+
+The application container also provides an unauthenticated `GET /healthz`
+readiness check on its private Docker network. Docker uses it to verify ASGI
+responsiveness without storing an API key. Caddy does not expose this route,
+so `https://<hostname>/healthz` returns `404` publicly.
+
+To update a checkout-based deployment:
+
+```bash
+git pull --ff-only
+docker compose build --pull
+docker compose up -d
+```
+
+Caddy stores certificates in the `caddy_data` Docker volume, not in the Git
+repository. Back up that volume according to the VM's operational policy.
+Local `.env` files, certificate files, and private keys are ignored by Git.
+Compose gives the MCP container 30 seconds to stop gracefully before Docker
+may terminate it. Cancelling an HTTP request cannot forcibly stop synchronous
+Python code already running in a worker; backend and workflow timeouts remain
+the normal bound, with the container stop grace period as the deployment-level
+shutdown bound.
+
 ### Configuration
 
-The server checks these sources in order:
+In local `stdio` mode, the server checks these sources in order:
 
 1. **Environment variables:** `DEEPBIOLOGY_API_KEY`, `DEEPBIOLOGY_BASE_URL`
 2. **CLI config file:** `~/.config/deepbiology-lab/config.json`

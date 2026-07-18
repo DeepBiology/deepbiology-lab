@@ -1,0 +1,10 @@
+{$MCP_PUBLIC_HOSTNAME} {
+	@mcp path /mcp /mcp/*
+	handle @mcp {
+		reverse_proxy mcp:8000
+	}
+
+	handle {
+		respond "Not Found" 404
+	}
+}
