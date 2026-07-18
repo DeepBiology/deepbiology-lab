@@ -1,14 +1,10 @@
 {
   "name": "deepbiology-lab",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Resolve genes, cell lines, and variants and run DeepBiology genomics workflows from Gemini CLI.",
   "mcpServers": {
     "deepbiology-lab": {
       "command": "deepbiology-lab-mcp",
-      "env": {
-        "DEEPBIOLOGY_API_KEY": "$DEEPBIOLOGY_API_KEY",
-        "DEEPBIOLOGY_BASE_URL": "$DEEPBIOLOGY_BASE_URL"
-      },
       "timeout": 1800000
     }
   },

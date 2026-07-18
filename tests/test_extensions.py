@@ -26,6 +26,8 @@ class ExtensionPackagingTests(unittest.TestCase):
             gemini["mcpServers"]["deepbiology-lab"]["command"],
             agy_mcp["mcpServers"]["deepbiology-lab"]["command"],
         )
+        self.assertNotIn("env", gemini["mcpServers"]["deepbiology-lab"])
+        self.assertNotIn("env", agy_mcp["mcpServers"]["deepbiology-lab"])
 
     def test_codex_skills_are_generated_from_canonical_skills(self):
         self.assertTrue(sync_plugin_skills.is_synchronized())

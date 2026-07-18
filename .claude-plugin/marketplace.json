@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Codex plugins for DeepBiology Lab — submit and track genomics research workflows from your AI coding agent.",
-    "version": "0.3.0"
+    "version": "0.3.1"
   },
   "plugins": [
     {
