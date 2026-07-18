@@ -26,7 +26,7 @@ jobs:
           -e MCP_PUBLIC_HOSTNAME=mcp.example.test
           -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro"
           caddy:2-alpine
-          validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - name: Build and smoke-test MCP image
         run: |
           docker build --tag deepbiology-lab-mcp:test .
