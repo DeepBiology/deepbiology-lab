@@ -1,6 +1,6 @@
 {
   "name": "deepbiology-lab",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Resolve genes, cell lines, and variants and run DeepBiology genomics workflows from Gemini CLI.",
   "mcpServers": {
     "deepbiology-lab": {
