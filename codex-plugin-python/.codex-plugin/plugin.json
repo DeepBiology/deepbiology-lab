@@ -1,6 +1,6 @@
 {
   "name": "deepbiology",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Codex plugin for DeepBiology Lab with shared agent skills and MCP tools for model-aware genomics workflows.",
   "author": {
     "name": "DeepBiology",

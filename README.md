@@ -320,3 +320,7 @@ To add a new alias to the gene resolver:
 - Console scripts: `deepbiology-lab` (CLI), `deepbiology-lab-mcp` (MCP server)
 - Codex plugin: `codex-plugin-python/` directory (install via `codex plugin marketplace add DeepBiology/deepbiology-lab`)
 - Importable Python client remains available as `deepbiology`
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
