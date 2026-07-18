@@ -11,6 +11,9 @@ Usage:
     # or using the shared CLI config:
     deepbiology-lab-mcp
 
+    # authenticated, stateless Streamable HTTP:
+    MCP_TRANSPORT=streamable-http deepbiology-lab-mcp
+
 Configuration (priority order):
     1. Environment variables: DEEPBIOLOGY_API_KEY, DEEPBIOLOGY_BASE_URL
     2. ~/.config/deepbiology-lab/config.json (same as CLI)
@@ -18,15 +21,32 @@ Configuration (priority order):
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import json
+import hashlib
+import logging
 import os
+import re
 import urllib.request
 import urllib.parse
 import urllib.error
+import uuid
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial, wraps
 from typing import Any, Dict, Optional
 from dataclasses import dataclass
 
+import httpx
+from pydantic import Field
 from mcp.server.fastmcp import FastMCP
+from mcp.server.auth.middleware.auth_context import get_access_token
+from mcp.server.auth.provider import AccessToken, TokenVerifier
+from mcp.server.auth.settings import AuthSettings
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from deepbiology import (
     DEFAULT_ASSAY_TYPE,
@@ -39,9 +59,19 @@ from deepbiology import (
 )
 from deepbiology_lab.config import DEFAULT_BASE_URL, load_config
 
-# ── MCP Server ─────────────────────────────────────────────────────
+# ── Tool Registration ──────────────────────────────────────────────
 
-server = FastMCP("deepbiology-lab")
+_ToolDefinition = tuple[Callable[..., Any], str]
+_TOOL_DEFINITIONS: list[_ToolDefinition] = []
+
+
+def _mcp_tool(*, description: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Record a tool once so fresh stdio and HTTP servers share identical schemas."""
+    def decorator(function: Callable[..., Any]) -> Callable[..., Any]:
+        _TOOL_DEFINITIONS.append((function, description))
+        return function
+
+    return decorator
 
 
 # ── Config Loading ─────────────────────────────────────────────────
@@ -77,9 +107,119 @@ def _load_config() -> _Config:
     )
 
 
+def _load_base_url() -> str:
+    """Load only the process-wide backend URL, never a request credential."""
+    base_url = os.environ.get("DEEPBIOLOGY_BASE_URL") or ""
+    if not base_url:
+        try:
+            base_url = load_config().get("base_url") or ""
+        except Exception:
+            pass
+    return base_url or DEFAULT_BASE_URL
+
+
 def _get_client() -> DeepBiologyClient:
+    access_token = get_access_token()
+    if access_token is not None:
+        return DeepBiologyClient(
+            api_key=access_token.token,
+            base_url=_load_base_url(),
+        )
+
     cfg = _load_config()
     return DeepBiologyClient(api_key=cfg.api_key, base_url=cfg.base_url)
+
+
+class _RedactedAccessToken(AccessToken):
+    """SDK credential whose supported token field is omitted from repr/str."""
+
+    token: str = Field(repr=False)
+
+
+class _AuthenticationBackendUnavailable(RuntimeError):
+    """Sanitized error used when API-key validation cannot reach the backend."""
+
+
+class _HttpBoundaryMiddleware:
+    """Map auth outages to 503 and close the HTTP tool executor at shutdown."""
+
+    def __init__(self, app: ASGIApp, tool_executor: ThreadPoolExecutor):
+        self.app = app
+        self.tool_executor = tool_executor
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await self.app(scope, receive, send)
+        except _AuthenticationBackendUnavailable:
+            response = JSONResponse(
+                {
+                    "error": "authentication_service_unavailable",
+                    "error_description": "DeepBiology authentication service is temporarily unavailable",
+                },
+                status_code=503,
+                headers={
+                    "Cache-Control": "no-store",
+                    "Retry-After": "30",
+                },
+            )
+            await response(scope, receive, send)
+        finally:
+            if scope["type"] == "lifespan":
+                self.tool_executor.shutdown(wait=True)
+
+
+def _is_well_formed_bearer_token(token: str) -> bool:
+    return bool(token) and re.fullmatch(r"\S+", token) is not None
+
+
+async def _request_api_key_validation(api_key: str, base_url: str, probe_job_id: str) -> str:
+    """Make one sanitized asynchronous validation request to the existing backend."""
+    try:
+        async with httpx.AsyncClient(
+            headers={"Authorization": "Bearer " + api_key},
+            timeout=15,
+        ) as client:
+            response = await client.get(
+                base_url.rstrip("/") + "/getDeepbiologyJobApi",
+                params={"jobId": probe_job_id},
+            )
+    except httpx.HTTPError:
+        return "unavailable"
+
+    if response.status_code == 401:
+        return "invalid"
+    if response.status_code == 404 or response.status_code < 400:
+        return "valid"
+    return "unavailable"
+
+
+async def _validate_api_key(api_key: str, base_url: str) -> str:
+    """Validate with a fresh nonexistent job ID without creating work or credit usage."""
+    probe_job_id = uuid.uuid4().hex + uuid.uuid4().hex
+    return await _request_api_key_validation(api_key, base_url, probe_job_id)
+
+
+class _DeepBiologyTokenVerifier(TokenVerifier):
+    """Validate one bearer credential for one asynchronous HTTP request."""
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        if not _is_well_formed_bearer_token(token):
+            return None
+
+        base_url = _load_base_url()
+        validation = await _validate_api_key(token, base_url)
+        if validation == "invalid":
+            return None
+        if validation != "valid":
+            raise _AuthenticationBackendUnavailable(
+                "DeepBiology authentication backend is unavailable"
+            )
+
+        return _RedactedAccessToken(
+            token=token,
+            client_id=hashlib.sha256(token.encode("utf-8")).hexdigest(),
+            scopes=[],
+        )
 
 
 # ── Tool: resolve_gene ────────────────────────────────────────────
@@ -183,7 +323,7 @@ CURATED_ALIASES: Dict[str, str] = {
 }
 
 
-@server.tool(description="Resolve a gene name, alias, or description to its official HGNC symbol")
+@_mcp_tool(description="Resolve a gene name, alias, or description to its official HGNC symbol")
 def resolve_gene(query: str) -> str:
     """
     Resolve a gene reference to its canonical HGNC gene symbol.
@@ -254,7 +394,7 @@ def resolve_gene(query: str) -> str:
 
 # ── Tool: resolve_cell_line ───────────────────────────────────────
 
-@server.tool(description="Resolve a cell-line name to the output-channel index for a DeepBiology model and assay")
+@_mcp_tool(description="Resolve a cell-line name to the output-channel index for a DeepBiology model and assay")
 def resolve_cell_line(
     cell_name: str,
     model_id: str = DEFAULT_MODEL_ID,
@@ -284,7 +424,7 @@ def resolve_cell_line(
 
 # ── Tools: variants ───────────────────────────────────────────────
 
-@server.tool(description="Find known Ensembl variants within a GRCh38/hg38 or GRCh37/hg19 genomic region")
+@_mcp_tool(description="Find known Ensembl variants within a GRCh38/hg38 or GRCh37/hg19 genomic region")
 def find_variants(
     region: str,
     assembly: str = "GRCh38",
@@ -297,7 +437,7 @@ def find_variants(
     )
 
 
-@server.tool(description="Annotate a dbSNP rsID with Ensembl VEP transcript, regulatory, and intergenic consequences")
+@_mcp_tool(description="Annotate a dbSNP rsID with Ensembl VEP transcript, regulatory, and intergenic consequences")
 def annotate_variant(variant_id: str, assembly: str = "GRCh38") -> str:
     """Run Ensembl VEP annotation through the shared DeepBiology SDK."""
     return json.dumps(
@@ -306,7 +446,7 @@ def annotate_variant(variant_id: str, assembly: str = "GRCh38") -> str:
     )
 
 
-@server.tool(description="Deprecated alias for find_variants; query known variants in a genomic region")
+@_mcp_tool(description="Deprecated alias for find_variants; query known variants in a genomic region")
 def resolve_snps(
     region: str,
     genome_build: str = "hg38",
@@ -316,7 +456,7 @@ def resolve_snps(
     return find_variants(region=region, assembly=genome_build, limit=max_results)
 
 
-@server.tool(description="Deprecated alias for annotate_variant; annotate an rsID with Ensembl VEP")
+@_mcp_tool(description="Deprecated alias for annotate_variant; annotate an rsID with Ensembl VEP")
 def resolve_snp_impact(rsid: str, genome_build: str = "hg38") -> str:
     """Compatibility alias retained for existing MCP clients."""
     return annotate_variant(variant_id=rsid, assembly=genome_build)
@@ -324,7 +464,7 @@ def resolve_snp_impact(rsid: str, genome_build: str = "hg38") -> str:
 
 # ── Tool: resolve_cancer_mutations ────────────────────────────────
 
-@server.tool(description="Query known cancer (somatic) mutations for a gene via myvariant.info (COSMIC + ClinVar + CADD)")
+@_mcp_tool(description="Query known cancer (somatic) mutations for a gene via myvariant.info (COSMIC + ClinVar + CADD)")
 def resolve_cancer_mutations(
     gene_name: str,
     tumor_site: str = "",
@@ -442,7 +582,7 @@ def _submit(
 
 # ── Tool: submit_q1_regulation ────────────────────────────────────
 
-@server.tool(description="Submit Q1: Plot transcription gradient for a gene across a cell line")
+@_mcp_tool(description="Submit Q1: Plot transcription gradient for a gene across a cell line")
 def submit_q1_regulation(
     gene_name: str,
     cell_line: str = "195",
@@ -502,7 +642,7 @@ def submit_q1_regulation(
 
 # ── Tool: submit_q2_enhancer_importance ───────────────────────────
 
-@server.tool(description="Submit Q2: Mutation importance scan at a genomic coordinate")
+@_mcp_tool(description="Submit Q2: Mutation importance scan at a genomic coordinate")
 def submit_q2_enhancer_importance(
     gene_name: str,
     cell_line: str = "195",
@@ -549,7 +689,7 @@ def submit_q2_enhancer_importance(
 
 # ── Tool: submit_q3_mutation_impact ───────────────────────────────
 
-@server.tool(description="Submit Q3: Test a specific mutated sequence at a coordinate")
+@_mcp_tool(description="Submit Q3: Test a specific mutated sequence at a coordinate")
 def submit_q3_mutation_impact(
     gene_name: str,
     coordinate: str,
@@ -604,7 +744,7 @@ def submit_q3_mutation_impact(
 
 # ── Tool: submit_q4_enhancer_redesign ─────────────────────────────
 
-@server.tool(description="Submit Q4: Enhancer optimization with AI-driven redesign")
+@_mcp_tool(description="Submit Q4: Enhancer optimization with AI-driven redesign")
 def submit_q4_enhancer_redesign(
     gene_name: str,
     cell_line: str = "195",
@@ -661,7 +801,7 @@ def submit_q4_enhancer_redesign(
 
 # ── Tool: get_job_status ──────────────────────────────────────────
 
-@server.tool(description="Check the current status of a submitted job")
+@_mcp_tool(description="Check the current status of a submitted job")
 def get_job_status(job_id: str) -> str:
     """
     Check the current processing status of a job.
@@ -687,7 +827,7 @@ def get_job_status(job_id: str) -> str:
 
 # ── Tool: get_job_result ──────────────────────────────────────────
 
-@server.tool(description="Retrieve the completed result of a job, including data fields, tables, and image URL")
+@_mcp_tool(description="Retrieve the completed result of a job, including data fields, tables, and image URL")
 def get_job_result(job_id: str) -> str:
     """
     Retrieve the clean result for a completed job.
@@ -707,7 +847,7 @@ def get_job_result(job_id: str) -> str:
     return json.dumps(clean, indent=2, default=str)
 
 
-@server.tool(description="Wait for a job and save its JSON result and optional image to local files")
+@_mcp_tool(description="Wait for a job and save its JSON result and optional image to local files")
 def download_job_result(
     job_id: str,
     output_directory: str = "deepbiology-experiments",
@@ -723,8 +863,40 @@ def download_job_result(
     By default, writes the result to
     ``deepbiology-experiments/run_<jobId>/result_<jobId>.json``.
     The optional image uses ``result_<jobId>.png`` in the same run directory.
+
+    Streamable HTTP requests never write to the server filesystem. They return
+    the completed result and signed image URL inline instead.
     """
     client = _get_client()
+
+    if get_access_token() is not None:
+        if output_directory != "deepbiology-experiments" or run_name is not None or image_path is not None:
+            raise ValueError(
+                "Remote download requests cannot select server filesystem paths; "
+                "use the default arguments to receive the result inline"
+            )
+        if download_image:
+            raise ValueError(
+                "Remote download requests cannot write image files; use the signed image URL in the inline result"
+            )
+
+        client.wait_for_job(
+            job_id,
+            poll_seconds=poll_seconds,
+            timeout_seconds=timeout_seconds,
+        )
+        normalized = client.get_job_result(job_id)
+        payload = normalized if raw else client.format_clean_result(normalized)
+        image = (payload.get("result") or {}).get("image") if raw else payload.get("image")
+        image = image or {}
+        return json.dumps({
+            "jobId": job_id,
+            "delivery": "inline",
+            "raw": raw,
+            "imageUrl": image.get("storageSignedUrl") or image.get("url"),
+            "result": payload,
+        }, indent=2, default=str)
+
     downloaded = client.download_job_result(
         job_id,
         output_directory=output_directory,
@@ -743,7 +915,7 @@ def download_job_result(
 
 # ── Tool: list_models ─────────────────────────────────────────────
 
-@server.tool(description="List available DeepBiology Lab models and their supported workflows")
+@_mcp_tool(description="List available DeepBiology Lab models and their supported workflows")
 def list_models() -> str:
     """
     List the available analysis models and what workflows each supports.
@@ -754,11 +926,162 @@ def list_models() -> str:
     return json.dumps(sdk_list_models(), indent=2)
 
 
+# ── Server Construction ───────────────────────────────────────────
+
+def _http_tool_adapter(
+    function: Callable[..., Any],
+    executor: ThreadPoolExecutor,
+) -> Callable[..., Any]:
+    """Run a synchronous tool off the event loop while preserving its schema."""
+
+    @wraps(function)
+    async def run_in_worker(*args: Any, **kwargs: Any) -> Any:
+        call = partial(function, *args, **kwargs)
+        request_context = contextvars.copy_context()
+        return await asyncio.get_running_loop().run_in_executor(
+            executor,
+            request_context.run,
+            call,
+        )
+
+    return run_in_worker
+
+
+async def _healthz(request: Request) -> JSONResponse:
+    """Credential-free process readiness for the private container network."""
+    del request
+    return JSONResponse({"status": "ok"})
+
+
+class _StreamableHttpFastMCP(FastMCP):
+    """FastMCP HTTP app with an outer sanitized auth-availability boundary."""
+
+    def __init__(self, *args: Any, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        # Keep lifecycle ownership explicit. AnyIO's managed worker path copied
+        # context correctly but exhibited an unresolved runtime-specific stall
+        # under nested MCP/ASGI execution during development.
+        self.tool_executor = ThreadPoolExecutor(
+            max_workers=min(32, (os.cpu_count() or 1) + 4),
+            thread_name_prefix="deepbiology-mcp-tool",
+        )
+
+    def streamable_http_app(self):
+        app = super().streamable_http_app()
+        # Starlette inserts newly added middleware before existing user
+        # middleware, so this catches verifier failures raised by MCP's
+        # AuthenticationMiddleware without changing SDK route internals.
+        app.add_middleware(
+            _HttpBoundaryMiddleware,
+            tool_executor=self.tool_executor,
+        )
+        return app
+
+class _SecretRedactionFilter(logging.Filter):
+    """Defense-in-depth redaction for accidental bearer/key log messages."""
+
+    _bearer_pattern = re.compile(r"(?i)(authorization\s*[:=]\s*)?bearer\s+\S+")
+    _key_pattern = re.compile(r"\bdbio_[A-Za-z0-9._~+/=-]+")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        rendered = record.getMessage()
+        rendered = self._bearer_pattern.sub("Bearer <redacted>", rendered)
+        rendered = self._key_pattern.sub("<redacted-deepbiology-key>", rendered)
+        record.msg = rendered
+        record.args = ()
+        return True
+
+
+def _install_secret_redaction_filter() -> None:
+    redaction_filter = _SecretRedactionFilter()
+    for logger_name in ("", __name__, "mcp", "uvicorn", "uvicorn.access", "uvicorn.error"):
+        target_logger = logging.getLogger(logger_name)
+        target_logger.addFilter(redaction_filter)
+        for handler in target_logger.handlers:
+            handler.addFilter(redaction_filter)
+
+
+def _http_port() -> int:
+    raw_port = os.environ.get("PORT") or os.environ.get("MCP_PORT") or "8000"
+    try:
+        port = int(raw_port)
+    except ValueError:
+        raise ValueError("PORT or MCP_PORT must be an integer") from None
+    if not 1 <= port <= 65535:
+        raise ValueError("PORT or MCP_PORT must be between 1 and 65535")
+    return port
+
+
+def _transport() -> str:
+    transport = (os.environ.get("MCP_TRANSPORT") or "stdio").strip().lower()
+    if transport not in {"stdio", "streamable-http"}:
+        raise ValueError("MCP_TRANSPORT must be 'stdio' or 'streamable-http'")
+    return transport
+
+
+def _create_server(
+    transport: str,
+    *,
+    host: str | None = None,
+    port: int | None = None,
+    token_verifier: TokenVerifier | None = None,
+) -> FastMCP:
+    if transport == "stdio":
+        mcp_server = FastMCP("deepbiology-lab")
+    elif transport == "streamable-http":
+        mcp_server = _StreamableHttpFastMCP(
+            "deepbiology-lab",
+            host=host or "0.0.0.0",
+            port=port or 8000,
+            streamable_http_path="/mcp",
+            stateless_http=True,
+            json_response=True,
+            token_verifier=token_verifier or _DeepBiologyTokenVerifier(),
+            auth=AuthSettings(
+                issuer_url="https://deepbiology.ai",
+                resource_server_url=None,
+                required_scopes=[],
+            ),
+        )
+        mcp_server.custom_route(
+            "/healthz",
+            methods=["GET"],
+            name="healthz",
+            include_in_schema=False,
+        )(_healthz)
+    else:
+        raise ValueError("transport must be 'stdio' or 'streamable-http'")
+
+    for function, description in _TOOL_DEFINITIONS:
+        registered_function = (
+            _http_tool_adapter(function, mcp_server.tool_executor)
+            if transport == "streamable-http"
+            else function
+        )
+        mcp_server.tool(description=description)(registered_function)
+    return mcp_server
+
+
+# Preserve the module-level server used by existing stdio integrations/tests.
+server = _create_server("stdio")
+
+
 # ── Entry Point ───────────────────────────────────────────────────
 
 def main() -> None:
-    """Run the MCP server over stdio transport."""
-    server.run(transport="stdio")
+    """Run stdio by default or authenticated stateless Streamable HTTP."""
+    transport = _transport()
+    if transport == "stdio":
+        server.run(transport="stdio")
+        return
+
+    _install_secret_redaction_filter()
+    http_server = _create_server(
+        "streamable-http",
+        host=os.environ.get("MCP_HOST") or "0.0.0.0",
+        port=_http_port(),
+    )
+    http_server.run(transport="streamable-http")
 
 
 if __name__ == "__main__":

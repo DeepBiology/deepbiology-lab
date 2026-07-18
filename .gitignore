@@ -7,3 +7,12 @@ dist/
 public/
 *.sh
 !scripts/install.sh
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer

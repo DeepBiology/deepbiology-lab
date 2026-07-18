@@ -1,11 +1,117 @@
 import json
+import logging
+import os
 import unittest
 from unittest.mock import Mock, patch
 
+from deepbiology import DeepBiologyClient
 from deepbiology_lab import mcp_server
 
 
 class McpServerTests(unittest.TestCase):
+    def test_default_transport_remains_stdio(self):
+        with patch.dict(os.environ, {}, clear=True), patch.object(mcp_server.server, "run") as run:
+            mcp_server.main()
+
+        run.assert_called_once_with(transport="stdio")
+
+    def test_port_precedence(self):
+        with patch.dict(os.environ, {"PORT": "9100", "MCP_PORT": "9200"}, clear=True):
+            self.assertEqual(mcp_server._http_port(), 9100)
+        with patch.dict(os.environ, {"MCP_PORT": "9200"}, clear=True):
+            self.assertEqual(mcp_server._http_port(), 9200)
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(mcp_server._http_port(), 8000)
+
+    def test_http_server_uses_required_streamable_settings(self):
+        http_server = mcp_server._create_server(
+            "streamable-http", host="192.0.2.10", port=9100
+        )
+
+        self.assertEqual(http_server.settings.host, "192.0.2.10")
+        self.assertEqual(http_server.settings.port, 9100)
+        self.assertEqual(http_server.settings.streamable_http_path, "/mcp")
+        self.assertTrue(http_server.settings.stateless_http)
+        self.assertTrue(http_server.settings.json_response)
+
+    def test_tool_schemas_preserve_public_parameters(self):
+        tools = mcp_server.server._tool_manager.list_tools()
+        self.assertEqual(len(tools), 15)
+        for tool in tools:
+            parameters = tool.parameters.get("properties", {})
+            self.assertNotIn("api_key", parameters)
+            self.assertNotIn("authorization", parameters)
+            self.assertNotIn("ctx", parameters)
+            self.assertIsNone(tool.context_kwarg)
+
+    def test_http_adapters_preserve_complete_tool_schemas(self):
+        http_server = mcp_server._create_server("streamable-http")
+        stdio_tools = {
+            tool.name: tool for tool in mcp_server.server._tool_manager.list_tools()
+        }
+        http_tools = {
+            tool.name: tool for tool in http_server._tool_manager.list_tools()
+        }
+
+        self.assertEqual(set(http_tools), set(stdio_tools))
+        for name, stdio_tool in stdio_tools.items():
+            http_tool = http_tools[name]
+            self.assertEqual(http_tool.title, stdio_tool.title)
+            self.assertEqual(http_tool.description, stdio_tool.description)
+            self.assertEqual(http_tool.parameters, stdio_tool.parameters)
+            self.assertEqual(
+                http_tool.fn_metadata.output_schema,
+                stdio_tool.fn_metadata.output_schema,
+            )
+            self.assertEqual(http_tool.context_kwarg, stdio_tool.context_kwarg)
+            self.assertEqual(http_tool.annotations, stdio_tool.annotations)
+            self.assertEqual(http_tool.icons, stdio_tool.icons)
+            self.assertEqual(http_tool.meta, stdio_tool.meta)
+            self.assertFalse(stdio_tool.is_async)
+            self.assertTrue(http_tool.is_async)
+
+    def test_stdio_client_still_uses_local_config(self):
+        config = mcp_server._Config(api_key="local-key", base_url="https://example.test")
+        with patch.object(mcp_server, "get_access_token", return_value=None), patch.object(
+            mcp_server, "_load_config", return_value=config
+        ), patch.object(mcp_server, "DeepBiologyClient", wraps=DeepBiologyClient) as client_type:
+            client = mcp_server._get_client()
+
+        client_type.assert_called_once_with(api_key="local-key", base_url="https://example.test")
+        self.assertEqual(client.api_key, "local-key")
+
+    def test_stdio_config_file_fallback_remains_unchanged(self):
+        with patch.dict(os.environ, {}, clear=True), patch.object(
+            mcp_server, "get_access_token", return_value=None
+        ), patch.object(
+            mcp_server,
+            "load_config",
+            return_value={"api_key": "file-key", "base_url": "https://file.example.test"},
+        ):
+            client = mcp_server._get_client()
+
+        self.assertEqual(client.api_key, "file-key")
+        self.assertEqual(client.base_url, "https://file.example.test")
+        self.assertTrue(
+            all(not tool.is_async for tool in mcp_server.server._tool_manager.list_tools())
+        )
+
+    def test_secret_bearing_objects_have_redacted_representations(self):
+        token = mcp_server._RedactedAccessToken(token="sentinel-secret", client_id="fingerprint", scopes=[])
+        client = DeepBiologyClient(api_key="sentinel-secret", base_url="https://example.test")
+
+        self.assertNotIn("sentinel-secret", repr(token))
+        self.assertNotIn("sentinel-secret", str(token))
+        self.assertNotIn("sentinel-secret", repr(client))
+
+        record = logging.LogRecord(
+            "test", logging.ERROR, __file__, 1,
+            "Authorization: Bearer sentinel-secret dbio_another-secret", (), None
+        )
+        mcp_server._SecretRedactionFilter().filter(record)
+        self.assertNotIn("sentinel-secret", record.getMessage())
+        self.assertNotIn("dbio_another-secret", record.getMessage())
+
     def test_cell_line_resolution_delegates_to_sdk_with_model_and_assay(self):
         expected = {
             "canonicalName": "KASUMI1",

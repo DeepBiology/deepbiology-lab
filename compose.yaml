@@ -1,0 +1,51 @@
+services:
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: deepbiology-lab-mcp:local
+    environment:
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      PORT: "8000"
+      DEEPBIOLOGY_BASE_URL: "${DEEPBIOLOGY_BASE_URL:-}"
+    expose:
+      - "8000"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      MCP_PUBLIC_HOSTNAME: "${MCP_PUBLIC_HOSTNAME:?Set MCP_PUBLIC_HOSTNAME to the public DNS hostname}"
+    depends_on:
+      mcp:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    networks:
+      - backend
+
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:

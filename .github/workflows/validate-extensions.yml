@@ -16,3 +16,44 @@ jobs:
       - run: pip install -e .
       - run: python scripts/validate_extensions.py
       - run: python -m unittest discover -s tests -v
+      - name: Validate Docker Compose configuration
+        env:
+          MCP_PUBLIC_HOSTNAME: mcp.example.test
+        run: docker compose config --quiet
+      - name: Validate Caddy configuration
+        run: >-
+          docker run --rm
+          -e MCP_PUBLIC_HOSTNAME=mcp.example.test
+          -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro"
+          caddy:2-alpine
+          caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+      - name: Build and smoke-test MCP image
+        run: |
+          docker build --tag deepbiology-lab-mcp:test .
+          test "$(docker image inspect deepbiology-lab-mcp:test --format '{{.Config.User}}')" = "10001:10001"
+
+          docker run --detach --name deepbiology-mcp-test \
+            --publish 127.0.0.1:18000:8000 \
+            deepbiology-lab-mcp:test
+          trap 'docker rm --force deepbiology-mcp-test >/dev/null 2>&1 || true' EXIT
+
+          status=""
+          for attempt in $(seq 1 30); do
+            status=$(curl --silent --output /tmp/mcp-response --write-out '%{http_code}' \
+              http://127.0.0.1:18000/mcp || true)
+            if [ "$status" = "401" ]; then
+              break
+            fi
+            sleep 1
+          done
+          test "$status" = "401"
+
+          health=""
+          for attempt in $(seq 1 30); do
+            health=$(docker inspect deepbiology-mcp-test --format '{{.State.Health.Status}}')
+            if [ "$health" = "healthy" ]; then
+              break
+            fi
+            sleep 1
+          done
+          test "$health" = "healthy"
