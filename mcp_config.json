@@ -2,11 +2,7 @@
   "mcpServers": {
     "deepbiology-lab": {
       "command": "deepbiology-lab-mcp",
-      "args": [],
-      "env": {
-        "DEEPBIOLOGY_API_KEY": "$DEEPBIOLOGY_API_KEY",
-        "DEEPBIOLOGY_BASE_URL": "$DEEPBIOLOGY_BASE_URL"
-      }
+      "args": []
     }
   }
 }
