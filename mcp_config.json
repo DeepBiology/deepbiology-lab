@@ -1,8 +1,10 @@
 {
   "mcpServers": {
     "deepbiology-lab": {
-      "command": "deepbiology-lab-mcp",
-      "args": []
+      "serverUrl": "${DEEPBIOLOGY_MCP_URL}",
+      "headers": {
+        "Authorization": "Bearer ${DEEPBIOLOGY_API_KEY}"
+      }
     }
   }
 }

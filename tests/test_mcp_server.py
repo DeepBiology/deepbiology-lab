@@ -4,6 +4,8 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 
+from uvicorn.logging import AccessFormatter
+
 from deepbiology import DeepBiologyClient
 from deepbiology_lab import mcp_server
 
@@ -111,6 +113,60 @@ class McpServerTests(unittest.TestCase):
         mcp_server._SecretRedactionFilter().filter(record)
         self.assertNotIn("sentinel-secret", record.getMessage())
         self.assertNotIn("dbio_another-secret", record.getMessage())
+
+    def test_secret_redaction_preserves_positional_formatter_arguments(self):
+        record = logging.LogRecord(
+            "uvicorn.access",
+            logging.INFO,
+            __file__,
+            1,
+            '%s - "%s %s HTTP/%s" %d',
+            (
+                "127.0.0.1:12345",
+                "GET",
+                "/mcp?token=dbio_query-secret",
+                "1.1",
+                200,
+            ),
+            None,
+        )
+
+        mcp_server._SecretRedactionFilter().filter(record)
+
+        self.assertIsInstance(record.args, tuple)
+        self.assertEqual(len(record.args), 5)
+        self.assertNotIn("dbio_query-secret", record.args[2])
+        rendered = AccessFormatter(
+            '%(client_addr)s - "%(request_line)s" %(status_code)s'
+        ).format(record)
+        self.assertIn("GET", rendered)
+        self.assertIn("200 OK", rendered)
+        self.assertNotIn("dbio_query-secret", rendered)
+
+    def test_secret_redaction_preserves_mapping_formatter_arguments(self):
+        record = logging.LogRecord(
+            "test",
+            logging.ERROR,
+            __file__,
+            1,
+            "authorization=%(authorization)s key=%(key)s count=%(count)d",
+            {
+                "authorization": "Bearer sentinel-secret",
+                "key": "dbio_mapping-secret",
+                "count": 2,
+            },
+            None,
+        )
+
+        mcp_server._SecretRedactionFilter().filter(record)
+
+        self.assertIsInstance(record.args, dict)
+        self.assertEqual(record.args["count"], 2)
+        rendered = record.getMessage()
+        self.assertIn("Bearer <redacted>", rendered)
+        self.assertIn("<redacted-deepbiology-key>", rendered)
+        self.assertNotIn("sentinel-secret", rendered)
+        self.assertNotIn("dbio_mapping-secret", rendered)
 
     def test_cell_line_resolution_delegates_to_sdk_with_model_and_assay(self):
         expected = {

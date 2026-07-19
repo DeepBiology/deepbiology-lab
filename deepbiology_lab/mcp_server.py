@@ -983,12 +983,33 @@ class _SecretRedactionFilter(logging.Filter):
     _bearer_pattern = re.compile(r"(?i)(authorization\s*[:=]\s*)?bearer\s+\S+")
     _key_pattern = re.compile(r"\bdbio_[A-Za-z0-9._~+/=-]+")
 
+    @classmethod
+    def _redact_text(cls, value: str) -> str:
+        value = cls._bearer_pattern.sub("Bearer <redacted>", value)
+        return cls._key_pattern.sub("<redacted-deepbiology-key>", value)
+
+    @classmethod
+    def _redact_value(cls, value: Any) -> Any:
+        """Redact strings without flattening formatter-specific containers."""
+        if isinstance(value, str):
+            return cls._redact_text(value)
+        if isinstance(value, tuple):
+            return tuple(cls._redact_value(item) for item in value)
+        if isinstance(value, list):
+            return [cls._redact_value(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                key: cls._redact_value(item)
+                for key, item in value.items()
+            }
+        return value
+
     def filter(self, record: logging.LogRecord) -> bool:
-        rendered = record.getMessage()
-        rendered = self._bearer_pattern.sub("Bearer <redacted>", rendered)
-        rendered = self._key_pattern.sub("<redacted-deepbiology-key>", rendered)
-        record.msg = rendered
-        record.args = ()
+        # Do not call getMessage() or clear args here. Specialized formatters,
+        # including Uvicorn's access formatter, inspect the original tuple or
+        # mapping after filters run.
+        record.msg = self._redact_value(record.msg)
+        record.args = self._redact_value(record.args)
         return True
 
 
