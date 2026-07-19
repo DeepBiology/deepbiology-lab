@@ -1,7 +1,7 @@
 {
   "name": "deepbiology",
   "version": "0.3.3",
-  "description": "Codex plugin for DeepBiology Lab with shared agent skills and MCP tools for model-aware genomics workflows.",
+  "description": "Codex plugin for DeepBiology Lab with shared agent skills for model-aware genomics workflows.",
   "author": {
     "name": "DeepBiology",
     "email": "support@deepbiology.ai",
@@ -21,11 +21,10 @@
     "python-sdk"
   ],
   "skills": "./skills",
-  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "DeepBiology Lab",
     "shortDescription": "Submit genomics research workflows to DeepBiology Lab from Codex.",
-    "longDescription": "Provides thirteen shared agent skills and MCP tools for DeepBiology Lab, including model- and assay-aware cell-line resolution, gene and variant annotation, four genomics inference workflows (Q1-Q4), setup, model discovery, cancer-mutation lookup, job status, result retrieval, and local artifact downloads.",
+    "longDescription": "Provides thirteen shared agent skills for DeepBiology Lab that work with its separately registered MCP server, including model- and assay-aware cell-line resolution, gene and variant annotation, four genomics inference workflows (Q1-Q4), setup, model discovery, cancer-mutation lookup, job status, result retrieval, and local artifact downloads.",
     "developerName": "DeepBiology",
     "category": "Science",
     "capabilities": [
