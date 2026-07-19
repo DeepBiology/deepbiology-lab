@@ -1,7 +1,9 @@
 {
   "mcpServers": {
     "deepbiology-lab": {
-      "command": "deepbiology-lab-mcp"
+      "type": "http",
+      "url": "${DEEPBIOLOGY_MCP_URL}",
+      "bearer_token_env_var": "DEEPBIOLOGY_API_KEY"
     }
   }
 }

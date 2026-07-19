@@ -40,6 +40,7 @@ def main() -> int:
     agy = _json(ROOT / "plugin.json")
     agy_mcp = _json(ROOT / "mcp_config.json")
     codex = _json(ROOT / "codex-plugin-python" / ".codex-plugin" / "plugin.json")
+    codex_mcp = _json(ROOT / "codex-plugin-python" / ".mcp.json")
     marketplace = _json(ROOT / ".claude-plugin" / "marketplace.json")
 
     versions = {
@@ -69,6 +70,11 @@ def main() -> int:
     assert gemini_settings["DEEPBIOLOGY_API_KEY"]["sensitive"] is True
     assert qwen["settings"] == gemini["settings"]
     assert codex["mcpServers"] == "./.mcp.json"
+    assert codex_mcp["mcpServers"]["deepbiology-lab"] == {
+        "type": "http",
+        "url": "${DEEPBIOLOGY_MCP_URL}",
+        "bearer_token_env_var": "DEEPBIOLOGY_API_KEY",
+    }
 
     skill_files = sorted((ROOT / "skills").glob("*/SKILL.md"))
     assert len(skill_files) == 13, "expected 13 canonical skills"

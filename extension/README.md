@@ -1,8 +1,8 @@
 # DeepBiology agent extensions
 
-The repository root is a Gemini CLI extension, Qwen CLI extension, and native
-Antigravity (AGY) plugin. These clients load the canonical `skills/` tree and
-connect to a remote Streamable HTTP MCP server.
+The repository root is a Qwen CLI extension, Gemini CLI extension, and native
+Antigravity (AGY) plugin, and it includes a Codex plugin. These clients load the
+canonical `skills/` tree and connect to a remote Streamable HTTP MCP server.
 
 ## Configuration
 
@@ -54,6 +54,18 @@ Remote calls to `download_job_result` return completed JSON and a signed image
 URL inline; they never write to the remote server's filesystem. Installing the
 Python package and launching `deepbiology-lab-mcp` remains supported for local
 stdio development, but is not required by the published remote configurations.
+
+## Codex CLI
+
+```bash
+codex plugin marketplace add DeepBiology/deepbiology-lab
+codex plugin add deepbiology@deepbiology-marketplace
+```
+
+The Codex plugin reads the same `DEEPBIOLOGY_MCP_URL` and
+`DEEPBIOLOGY_API_KEY` environment variables. Local stdio remains available as
+an opt-in development server with
+`codex mcp add deepbiology-lab-local -- deepbiology-lab-mcp`.
 
 ## Development
 

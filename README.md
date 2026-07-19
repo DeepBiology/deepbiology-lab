@@ -1,472 +1,178 @@
-# deepbiology-lab
+# DeepBiology Lab agent extensions
 
-Python SDK, CLI, MCP server, and shared Codex, Gemini CLI, Qwen CLI, and Antigravity
-(AGY) agent skills for DeepBiology Lab.
+DeepBiology Lab connects AI coding agents to genomics workflows for studying
+gene regulation, enhancer function, and mutation effects. This repository
+contains a Python SDK, a centralized Model Context Protocol (MCP) integration,
+and thirteen shared skills used by Qwen CLI, Gemini CLI, Antigravity (AGY), and
+Codex CLI.
 
-## Agent extensions
+Qwen connects to a universal, centralized Streamable HTTP MCP server deployed
+on an Alibaba Cloud VM. The same MCP service and canonical `skills/` tree also
+support the other tested agents, so the workflows are portable rather than tied
+to one agent runtime.
 
-The root `skills/` directory is the canonical source for thirteen DeepBiology
-skills shared by all supported agents. The Codex bundle is generated from that
-source; do not edit `codex-plugin-python/skills/` directly.
+## Supported agents
 
-Install the Gemini CLI extension:
+Set the centralized MCP endpoint and your DeepBiology API key before starting
+an agent. The URL must include `/mcp`.
 
 ```bash
-gemini extensions install https://github.com/DeepBiology/deepbiology-lab --auto-update
+export DEEPBIOLOGY_MCP_URL=https://<your-centralized-mcp-host>/mcp
+export DEEPBIOLOGY_API_KEY=dbio_your_api_key_here
 ```
 
-Gemini prompts for the complete Streamable HTTP endpoint and API key. For
-development, the endpoint can be `http://localhost:8000/mcp`; for production,
-use the deployment's public `https://<hostname>/mcp` URL.
+Each user supplies a separate API key. The extensions send it as an
+`Authorization: Bearer` header on every request.
 
-Install the Qwen CLI extension:
+### Qwen CLI
+
+Install the tested Qwen CLI extension directly from this repository:
 
 ```bash
 qwen extensions install https://github.com/DeepBiology/deepbiology-lab
 ```
 
-Qwen reads the same endpoint and per-user API-key settings from the dedicated
-`qwen-extension.json` manifest.
+Qwen loads `qwen-extension.json`, the shared skills, and the centralized MCP
+configuration.
 
-Install the native AGY plugin:
+### Gemini CLI
 
 ```bash
-export DEEPBIOLOGY_MCP_URL=https://mcp.example.com/mcp
-export DEEPBIOLOGY_API_KEY=dbio_your_api_key_here
+gemini extensions install https://github.com/DeepBiology/deepbiology-lab --auto-update
+```
+
+Gemini prompts for the MCP URL and API key during installation. Update them
+later with `gemini extensions config deepbiology-lab`.
+
+### Antigravity (AGY) CLI
+
+```bash
 agy plugin install https://github.com/DeepBiology/deepbiology-lab
 ```
 
-The published Gemini, Qwen, and AGY configurations connect to the remote server and
-send `Authorization: Bearer ${DEEPBIOLOGY_API_KEY}` on every request. They do
-not launch or require a local MCP executable. The server code still supports
-local `stdio` clients unchanged. See `extension/README.md` for configuration
-and development details.
+AGY can also import an existing Gemini installation with
+`agy plugin import gemini`.
 
-## Quick install
-
-**One-liner:**
+### Codex CLI
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DeepBiology/deepbiology-lab/main/scripts/install.sh | sh
+codex plugin marketplace add DeepBiology/deepbiology-lab
+codex plugin add deepbiology@deepbiology-marketplace
 ```
 
-**Or with pip directly:**
+The published Codex plugin uses the same centralized MCP URL and reads its
+Bearer token from `DEEPBIOLOGY_API_KEY`.
+
+## DeepBiology Lab
+
+DeepBiology Lab provides four complementary genomics workflows:
+
+| Workflow | Question |
+| --- | --- |
+| **Q1 — Regulation** | How does predicted transcription change across genomic coordinates for a gene and cell line? |
+| **Q2 — Enhancer importance** | Which nucleotides in a regulatory region are most important to the predicted signal? |
+| **Q3 — Mutation impact** | How does a specified DNA sequence change affect predicted regulation or enhancer function? |
+| **Q4 — Enhancer redesign** | Can an enhancer sequence be redesigned to optimize its predicted activity? |
+
+The supporting tools also resolve gene aliases, model-specific cell-line
+channels, known variants, and cancer mutations, and retrieve submitted job
+results.
+
+## Run a workflow with Qwen
+
+Python 3.9 or newer is required for the SDK and optional local tools. Install
+the package from GitHub:
 
 ```bash
 pip install git+https://github.com/DeepBiology/deepbiology-lab.git
 ```
 
-**Local development:**
+The published Qwen extension runs through the centralized MCP server, so it
+does not need a local MCP process. After exporting `DEEPBIOLOGY_MCP_URL` and
+`DEEPBIOLOGY_API_KEY` and installing the extension, start Qwen:
 
 ```bash
-git clone https://github.com/DeepBiology/deepbiology-lab.git
-cd deepbiology-lab
-pip install -e .
+qwen
 ```
 
-## Configure your API key
+Then describe the analysis in natural language. For example:
 
-```bash
-deepbiology-lab config --api-key dbio_your_api_key_here
+```text
+Run Q1 to analyze the transcription regulation of CD34 in Kasumi-1 cells.
 ```
 
-Optional:
-
-```bash
-deepbiology-lab config --base-url https://us-central1-deepbiology-471514.cloudfunctions.net
-deepbiology-lab config --show
+```text
+Find important enhancer positions near CD34, then explain how a mutation at a
+high-importance position could change the predicted regulatory signal.
 ```
 
-Config is stored at:
+The agent selects the appropriate shared skill, resolves names and model
+channels when necessary, submits the workflow, checks its status, and retrieves
+the result. Equivalent prompts can be used with Gemini, AGY, and Codex.
 
-```bash
-~/.config/deepbiology-lab/config.json
-```
+## Shared skills
 
-## Run workflows
-
-### Q1
-
-```bash
-deepbiology-lab run q1 --gene-name CD34 --cell-line 195 --download-image --image-path cd34.png
-deepbiology-lab run q1 --gene-name CD34 --cell-name kasumi-1 --model borzoi_finetune_v1 --assay-type RNASeq
-```
-
-When `--cell-name` is supplied, the CLI resolves `(model, assay type, cell
-name)` to the model's numeric output channel. `--assay-type` defaults to
-`RNASeq`; an explicit `--cell-line` index remains supported.
-
-By default the CLI prints the clean website-style JSON result. Use `--raw` to print the normalized raw API payload instead.
-
-```bash
-deepbiology-lab run q1 --gene-name CD34 --cell-line 195 --raw
-```
-
-### Q2
-
-```bash
-deepbiology-lab run q2 --gene-name CD34 --cell-line 195 --coordinate chr1:207923783-207923857
-```
-
-### Q3
-
-```bash
-deepbiology-lab run q3 --gene-name CD34 --cell-line 195 --coordinate chr1:207923783-207923857 --mutated-seq ATGGCCATGGCCATGGCCATGGCCATGGCC
-```
-
-### Q4
-
-```bash
-deepbiology-lab run q4 --gene-name CD34 --cell-line 195 --center 207923820 --flanking-size 75 --iterations 250 --download-image --image-path redesign.png
-```
-
-## Resolve model channels and variants
-
-```bash
-deepbiology-lab resolve kasumi-1 --model borzoi_finetune_v1 --assay-type RNASeq
-deepbiology-lab snps region chr1:207923720-207923920 --assembly GRCh38 --max-results 50
-deepbiology-lab snps impact rs1053802528 --assembly GRCh38
-```
-
-## Download completed job artifacts
-
-```bash
-deepbiology-lab download <jobId>
-deepbiology-lab download <jobId> --download-image
-```
-
-The default result path is
-`deepbiology-experiments/run_<jobId>/result_<jobId>.json`. With
-`--download-image`, the image defaults to `result_<jobId>.png` in the same run
-directory. Codex, Gemini, and AGY expose the same behavior through the
-`deepbiology-download-result` skill and `download_job_result` MCP tool.
-
-## Python usage
-
-```python
-from deepbiology import DeepBiologyClient
-from deepbiology import annotate_variant, find_variants, resolve_cell_line
-
-resolution = resolve_cell_line(
-    "kasumi-1",
-    model_id="borzoi_finetune_v1",
-    assay_type="RNASeq",
-)
-
-regional_variants = find_variants("chr1:207923720-207923920", limit=50)
-vep = annotate_variant("rs1053802528")
-
-client = DeepBiologyClient(
-    api_key="dbio_your_api_key_here",
-    base_url="https://us-central1-deepbiology-471514.cloudfunctions.net",
-)
-
-job = client.submit_job("q1_regulation", {
-    "task": "plot_transcription_gradient",
-    "gene_name": "CD34",
-    "cell_line": "195",
-})
-
-result = client.get_clean_result(job["jobId"])
-print(result)
-```
-
-## MCP Server
-
-The package includes an [MCP](https://modelcontextprotocol.io) (Model Context Protocol) server
-that exposes DeepBiology Lab workflows as tools for LLM chatboxes — Claude Desktop,
-VS Code Copilot Chat, Cursor, and any other MCP-compatible client.
-
-### Tools
-
-| Tool | Description |
-|------|-------------|
-| `resolve_gene` | Resolve a gene name/alias to canonical HGNC symbol (e.g. "cyclin D1" → `CCND1`) |
-| `submit_q1_regulation` | Submit Q1 — plot transcription gradient |
-| `submit_q2_enhancer_importance` | Submit Q2 — mutation importance scan |
-| `submit_q3_mutation_impact` | Submit Q3 — test a specific mutated sequence |
-| `submit_q4_enhancer_redesign` | Submit Q4 — AI-driven enhancer optimization |
-| `get_job_status` | Check a job's current processing status |
-| `get_job_result` | Retrieve completed result with data fields, tables, and image URL |
-
-### Published remote-client configuration
-
-The distributed Gemini, Qwen, and AGY manifests read the complete endpoint and the
-user's credential from environment variables:
-
-```bash
-# Local HTTP development server
-export DEEPBIOLOGY_MCP_URL=http://localhost:8000/mcp
-
-# Or a production HTTPS deployment
-export DEEPBIOLOGY_MCP_URL=https://mcp.example.com/mcp
-
-export DEEPBIOLOGY_API_KEY=dbio_your_api_key_here
-```
-
-The URL must include the `/mcp` path. The clients expand these variables into
-their remote MCP URL and `Authorization: Bearer` header; neither value is
-committed to the repository. Each user supplies a separate API key.
-
-### Local stdio usage
-
-```bash
-# Set your API key (or use the shared CLI config from ~/.config/deepbiology-lab/config.json)
-export DEEPBIOLOGY_API_KEY=dbio_your_api_key_here
-
-# Start the MCP server over stdio
-deepbiology-lab-mcp
-```
-
-The server executable's default transport remains local `stdio`, so existing
-command-based Codex, Gemini CLI, AGY, Qwen, Claude Desktop, VS Code, and Cursor
-configurations continue to work. The published Gemini, Qwen, and shared AGY
-manifests now default to the remote service.
-
-For a multi-user deployment, start the server in stateless Streamable HTTP
-mode:
-
-```bash
-MCP_TRANSPORT=streamable-http MCP_HOST=0.0.0.0 PORT=8000 deepbiology-lab-mcp
-```
-
-The MCP endpoint is `/mcp`. Every HTTP message must include
-`Authorization: Bearer <DeepBiology API key>`. Credentials are validated by
-the DeepBiology backend for each HTTP message and are used only in that
-request's authentication context; they are not copied into process
-environment variables or server/session state. `PORT` takes precedence over
-`MCP_PORT`, with `8000` as the default. `MCP_HOST` defaults to `0.0.0.0`.
-
-HTTP mode returns JSON responses, which are supported by the MCP 1.28.1
-Streamable HTTP client. The server is stateless, so clients must send the
-Bearer header on every message. The `download_job_result` tool returns result
-data and its signed image URL inline in HTTP mode. Remote callers cannot
-select server filesystem paths or request server-side image downloads; its
-existing local-file behavior is unchanged in `stdio` mode.
-
-Synchronous tool implementations are executed in a bounded worker pool in
-HTTP mode so slow backend or public-API calls do not block unrelated HTTP
-requests. Stdio continues to execute the original synchronous tools directly.
-If the DeepBiology authentication backend cannot be reached, the HTTP server
-returns a sanitized `503 Service Unavailable`; missing or invalid credentials
-continue to return `401 Unauthorized`.
-
-The dedicated executor is intentional. During development,
-`anyio.to_thread.run_sync()` propagated request context correctly in isolation
-but intermittently stalled during nested MCP/ASGI execution in this runtime.
-The cause remains unresolved and runtime-specific; it is not considered a
-confirmed AnyIO or MCP SDK defect. The executor explicitly copies the current
-request context into workers and is closed during ASGI lifespan shutdown.
-
-### Docker deployment with HTTPS
-
-The repository includes a production-oriented Docker Compose deployment for a
-headless Ubuntu 24.04 VM. The MCP application listens on `0.0.0.0:8000` inside
-Docker, but that port is never published on the host. Caddy is the only public
-service: it obtains and renews the TLS certificate, redirects port 80 to HTTPS,
-and forwards `https://<hostname>/mcp` from port 443 over the Docker network.
-
-Prerequisites:
-
-- A DNS `A`/`AAAA` record for the MCP hostname pointing to the VM.
-- Docker Engine and the Docker Compose plugin installed on the VM.
-- Cloud firewall and host firewall access for TCP 80 and TCP/UDP 443. Do not
-  open port 8000.
-- No other service using host ports 80 or 443.
-
-Create the local deployment environment from the non-secret example and set
-the bare DNS hostname:
-
-```bash
-cp .env.example .env
-sed -i 's/mcp.example.com/mcp.your-domain.example/' .env
-```
-
-Do not add `DEEPBIOLOGY_API_KEY` to `.env`, Compose, or the container. Every
-remote user supplies a separate key in the `Authorization: Bearer <key>`
-header on every MCP message. `DEEPBIOLOGY_BASE_URL` is the only optional
-DeepBiology setting in `.env`; leaving it empty selects the production backend.
-
-Build and start the deployment:
-
-```bash
-docker compose config --quiet
-docker compose up -d --build
-docker compose ps
-docker compose logs --tail=100 mcp caddy
-```
-
-Once DNS and certificate issuance have completed, an unauthenticated request
-should be rejected by the MCP application rather than by the proxy:
-
-```bash
-curl -i https://mcp.your-domain.example/mcp
-```
-
-The expected status is `401 Unauthorized`. Configure remote MCP clients with
-the URL `https://mcp.your-domain.example/mcp` and their own Bearer header.
-Requests to other paths return `404`.
-
-The application container also provides an unauthenticated `GET /healthz`
-readiness check on its private Docker network. Docker uses it to verify ASGI
-responsiveness without storing an API key. Caddy does not expose this route,
-so `https://<hostname>/healthz` returns `404` publicly.
-
-To update a checkout-based deployment:
-
-```bash
-git pull --ff-only
-docker compose build --pull
-docker compose up -d
-```
-
-Caddy stores certificates in the `caddy_data` Docker volume, not in the Git
-repository. Back up that volume according to the VM's operational policy.
-Local `.env` files, certificate files, and private keys are ignored by Git.
-Compose gives the MCP container 30 seconds to stop gracefully before Docker
-may terminate it. Cancelling an HTTP request cannot forcibly stop synchronous
-Python code already running in a worker; backend and workflow timeouts remain
-the normal bound, with the container stop grace period as the deployment-level
-shutdown bound.
-
-### Configuration
-
-In local `stdio` mode, the server checks these sources in order:
-
-1. **Environment variables:** `DEEPBIOLOGY_API_KEY`, `DEEPBIOLOGY_BASE_URL`
-2. **CLI config file:** `~/.config/deepbiology-lab/config.json`
-
-### Adding to an MCP client
-
-**Claude Desktop** (`claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "deepbiology-lab": {
-      "command": "deepbiology-lab-mcp",
-      "env": {
-        "DEEPBIOLOGY_API_KEY": "dbio_your_api_key_here"
-      }
-    }
-  }
-}
-```
-
-**VS Code Copilot** (`.vscode/mcp.json` or global settings):
-
-```json
-{
-  "servers": {
-    "deepbiology-lab": {
-      "command": "deepbiology-lab-mcp",
-      "env": {
-        "DEEPBIOLOGY_API_KEY": "dbio_your_api_key_here"
-      }
-    }
-  }
-}
-```
-
-**Cursor:**
-
-```json
-{
-  "mcpServers": {
-    "deepbiology-lab": {
-      "command": "deepbiology-lab-mcp",
-      "env": {
-        "DEEPBIOLOGY_API_KEY": "dbio_your_api_key_here"
-      }
-    }
-  }
-}
-
-```
-
-## Codex Plugin
-
-This package also ships a [Codex](https://openai.com/codex/) plugin (boltz-compatible pattern)
-that gives Codex agents the ability to submit and track DeepBiology Lab workflows via skills.
-
-The plugin source is in the `codex-plugin-python/` directory of this repo.
-
-### Skills
+The root `skills/` directory is the canonical, agent-neutral source for all
+thirteen skills.
 
 | Skill | What it does |
-|-------|-------------|
-| `deepbiology-setup` | Install the CLI package and configure API key |
-| `deepbiology-resolve-gene` | Resolve gene names/aliases to HGNC symbols |
-| `deepbiology-resolve-cell-line` | Resolve model- and assay-specific output-channel indices |
+| --- | --- |
+| `deepbiology-setup` | Configure the SDK, API key, and MCP connection |
+| `deepbiology-resolve-gene` | Resolve gene names and aliases to HGNC symbols |
+| `deepbiology-resolve-cell-line` | Resolve model- and assay-specific cell-line channels |
 | `deepbiology-list-models` | List supported model catalogs |
-| `deepbiology-resolve-snps` | Find regional variants and annotate rsIDs with VEP |
-| `deepbiology-cancer-mutations` | Query aggregated cancer-mutation annotations |
-| `deepbiology-q1-regulation` | Submit Q1 — transcription gradient analysis |
-| `deepbiology-q2-enhancer-importance` | Submit Q2 — enhancer mutation importance scan |
-| `deepbiology-q3-mutation-impact` | Submit Q3 — mutated sequence impact evaluation |
-| `deepbiology-q4-enhancer-redesign` | Submit Q4 — AI-driven enhancer optimization |
-| `deepbiology-check-status` | Check the status of a submitted job |
-| `deepbiology-get-result` | Retrieve completed job results |
+| `deepbiology-resolve-snps` | Find regional variants and annotate dbSNP identifiers |
+| `deepbiology-cancer-mutations` | Query cancer-mutation annotations |
+| `deepbiology-q1-regulation` | Run Q1 transcription-regulation analysis |
+| `deepbiology-q2-enhancer-importance` | Run Q2 enhancer-importance analysis |
+| `deepbiology-q3-mutation-impact` | Run Q3 mutation-impact analysis |
+| `deepbiology-q4-enhancer-redesign` | Run Q4 enhancer-redesign analysis |
+| `deepbiology-check-status` | Check a submitted job |
+| `deepbiology-get-result` | Retrieve and explain a completed result |
 | `deepbiology-download-result` | Save result JSON and optional image artifacts locally |
 
-### How to install
+## Architecture
 
-```bash
-# Add the marketplace (from the git repo)
-codex plugin marketplace add DeepBiology/deepbiology-lab
-codex plugin add deepbiology@deepbiology-marketplace
-
-# Set your API key
-export DEEPBIOLOGY_API_KEY=dbio_your_api_key_here
-
-# Now describe what you want in natural language —
-# Codex will pick the right skill automatically
-```
-
-### Local development
-
-```bash
-# Point Codex at the local plugin directory
-codex --plugin-dir ./codex-plugin-python
-```
-
-### Architecture
-
-The canonical skills instruct Codex, Gemini, and AGY to call the shared MCP
-tools. The MCP server delegates model catalogs, cell-line resolution, and
-variant annotation to the SDK. The Codex-only `scripts/query.py` wrapper remains
-available as a compatibility fallback for installations that do not load MCP.
+Qwen, Gemini, AGY, and Codex share the same skills and centralized MCP service.
+The service is deployed on an Alibaba Cloud VM and authenticates every request
+with the caller's DeepBiology API key.
 
 ```mermaid
 flowchart LR
-    A[User prompt] --> B[Codex agent]
-    B --> C{Which skill?}
-    C --> D[SKILL.md instructions]
-    D --> E[deepbiology-lab-mcp]
-    D -. compatibility fallback .-> H[python scripts/query.py]
-    E --> F[DeepBiologyClient]
-    H --> F
-    F --> G[DeepBiology API]
+    U[User] <--> Q[Qwen CLI]
+    U <--> G[Gemini CLI]
+    U <--> A[AGY CLI]
+    U <--> C[Codex CLI]
+    Q <--> S[Shared agent skills]
+    G <--> S
+    A <--> S
+    C <--> S
+    S <--> M[Centralized MCP server<br/>Alibaba Cloud VM]
+    M <--> D[DeepBiology Lab services]
 ```
 
-### Expanding the plugin
+The centralized server is the default. For local development, the package can
+still run the MCP server over stdio:
 
-To add a new skill:
-1. Create a new directory under the canonical `skills/` tree with a `SKILL.md`
-2. Add the workflow logic to `codex-plugin-python/scripts/query.py` (if a new workflow type)
-3. Run `python scripts/sync_plugin_skills.py`
-4. Add or update the shared MCP tool and tests as needed
+```bash
+deepbiology-lab config --api-key dbio_your_api_key_here
+deepbiology-lab-mcp
+```
 
-To add a new alias to the gene resolver:
-1. Edit `CURATED_ALIASES` in `codex-plugin-python/scripts/query.py`
-2. Add a new line: `"ALIAS": "CANONICAL_SYMBOL",`
+Codex users can register that optional local server separately:
+
+```bash
+codex mcp add deepbiology-lab-local -- deepbiology-lab-mcp
+```
 
 ## Notes
 
-- Package name: `deepbiology-lab`
-- Console scripts: `deepbiology-lab` (CLI), `deepbiology-lab-mcp` (MCP server)
-- Codex plugin: `codex-plugin-python/` directory (install via `codex plugin marketplace add DeepBiology/deepbiology-lab`)
-- Importable Python client remains available as `deepbiology`
+- Do not commit API keys. Each remote caller supplies its own key.
+- `DEEPBIOLOGY_MCP_URL` must be the complete HTTPS endpoint, including `/mcp`.
+- Remote agent calls return result data and signed image URLs; they do not write
+  artifacts to the MCP server's filesystem.
+- The SDK remains importable as `deepbiology`.
+- The console scripts are `deepbiology-lab` and `deepbiology-lab-mcp`.
 
 ## License
 
