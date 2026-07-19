@@ -98,8 +98,11 @@ note "  2. Start the MCP server (for Claude Desktop, Cursor, VS Code):"
 note "     deepbiology-lab-mcp"
 note ""
 note "  3. Install the Codex plugin (for OpenAI Codex):"
+note '     export DEEPBIOLOGY_MCP_URL=https://your-mcp-host.example/mcp'
+note '     export DEEPBIOLOGY_API_KEY=dbio_your_api_key_here'
 note "     codex plugin marketplace add ${REPO}"
 note "     codex plugin add deepbiology@deepbiology-marketplace"
+note '     codex mcp add deepbiology-lab --url "$DEEPBIOLOGY_MCP_URL" --bearer-token-env-var DEEPBIOLOGY_API_KEY'
 note ""
 note "  4. Follow the full guide:"
 note "     https://github.com/${REPO}"

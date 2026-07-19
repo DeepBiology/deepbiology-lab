@@ -19,7 +19,6 @@ class ExtensionPackagingTests(unittest.TestCase):
         marketplace = json.loads((ROOT / ".claude-plugin/marketplace.json").read_text())
         agy = json.loads((ROOT / "plugin.json").read_text())
         agy_mcp = json.loads((ROOT / "mcp_config.json").read_text())
-        codex_mcp = json.loads((ROOT / "codex-plugin-python/.mcp.json").read_text())
 
         self.assertEqual(gemini["version"], codex["version"])
         self.assertEqual(gemini["version"], qwen["version"])
@@ -29,7 +28,6 @@ class ExtensionPackagingTests(unittest.TestCase):
         gemini_server = gemini["mcpServers"]["deepbiology-lab"]
         qwen_server = qwen["mcpServers"]["deepbiology-lab"]
         agy_server = agy_mcp["mcpServers"]["deepbiology-lab"]
-        codex_server = codex_mcp["mcpServers"]["deepbiology-lab"]
         self.assertEqual(gemini_server["httpUrl"], "${DEEPBIOLOGY_MCP_URL}")
         self.assertEqual(qwen_server, gemini_server)
         self.assertEqual(agy_server["serverUrl"], "${DEEPBIOLOGY_MCP_URL}")
@@ -38,14 +36,12 @@ class ExtensionPackagingTests(unittest.TestCase):
             {"Authorization": "Bearer ${DEEPBIOLOGY_API_KEY}"},
         )
         self.assertEqual(gemini_server["headers"], agy_server["headers"])
-        self.assertEqual(
-            codex_server,
-            {
-                "type": "http",
-                "url": "${DEEPBIOLOGY_MCP_URL}",
-                "bearer_token_env_var": "DEEPBIOLOGY_API_KEY",
-            },
-        )
+        self.assertNotIn("mcpServers", codex)
+        self.assertFalse((ROOT / "codex-plugin-python/.mcp.json").exists())
+        readme = (ROOT / "README.md").read_text()
+        self.assertIn("codex mcp add deepbiology-lab", readme)
+        self.assertIn('--url "$DEEPBIOLOGY_MCP_URL"', readme)
+        self.assertIn("--bearer-token-env-var DEEPBIOLOGY_API_KEY", readme)
         for server in (gemini_server, agy_server):
             self.assertNotIn("command", server)
             self.assertNotIn("args", server)
