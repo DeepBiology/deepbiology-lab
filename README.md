@@ -1,6 +1,6 @@
 # deepbiology-lab
 
-Python SDK, CLI, MCP server, and shared Codex, Gemini CLI, and Antigravity
+Python SDK, CLI, MCP server, and shared Codex, Gemini CLI, Qwen CLI, and Antigravity
 (AGY) agent skills for DeepBiology Lab.
 
 ## Agent extensions
@@ -15,15 +15,32 @@ Install the Gemini CLI extension:
 gemini extensions install https://github.com/DeepBiology/deepbiology-lab --auto-update
 ```
 
+Gemini prompts for the complete Streamable HTTP endpoint and API key. For
+development, the endpoint can be `http://localhost:8000/mcp`; for production,
+use the deployment's public `https://<hostname>/mcp` URL.
+
+Install the Qwen CLI extension:
+
+```bash
+qwen extensions install https://github.com/DeepBiology/deepbiology-lab
+```
+
+Qwen reads the same endpoint and per-user API-key settings from the dedicated
+`qwen-extension.json` manifest.
+
 Install the native AGY plugin:
 
 ```bash
+export DEEPBIOLOGY_MCP_URL=https://mcp.example.com/mcp
+export DEEPBIOLOGY_API_KEY=dbio_your_api_key_here
 agy plugin install https://github.com/DeepBiology/deepbiology-lab
 ```
 
-Both local extensions require the `deepbiology-lab-mcp` executable provided by
-this Python package. See `extension/README.md` for configuration and development
-details.
+The published Gemini, Qwen, and AGY configurations connect to the remote server and
+send `Authorization: Bearer ${DEEPBIOLOGY_API_KEY}` on every request. They do
+not launch or require a local MCP executable. The server code still supports
+local `stdio` clients unchanged. See `extension/README.md` for configuration
+and development details.
 
 ## Quick install
 
@@ -172,7 +189,26 @@ VS Code Copilot Chat, Cursor, and any other MCP-compatible client.
 | `get_job_status` | Check a job's current processing status |
 | `get_job_result` | Retrieve completed result with data fields, tables, and image URL |
 
-### Usage
+### Published remote-client configuration
+
+The distributed Gemini, Qwen, and AGY manifests read the complete endpoint and the
+user's credential from environment variables:
+
+```bash
+# Local HTTP development server
+export DEEPBIOLOGY_MCP_URL=http://localhost:8000/mcp
+
+# Or a production HTTPS deployment
+export DEEPBIOLOGY_MCP_URL=https://mcp.example.com/mcp
+
+export DEEPBIOLOGY_API_KEY=dbio_your_api_key_here
+```
+
+The URL must include the `/mcp` path. The clients expand these variables into
+their remote MCP URL and `Authorization: Bearer` header; neither value is
+committed to the repository. Each user supplies a separate API key.
+
+### Local stdio usage
 
 ```bash
 # Set your API key (or use the shared CLI config from ~/.config/deepbiology-lab/config.json)
@@ -182,9 +218,10 @@ export DEEPBIOLOGY_API_KEY=dbio_your_api_key_here
 deepbiology-lab-mcp
 ```
 
-The default transport remains local `stdio`, so existing Codex, Gemini CLI,
-AGY, Qwen, Claude Desktop, VS Code, and Cursor configurations do not need to
-change.
+The server executable's default transport remains local `stdio`, so existing
+command-based Codex, Gemini CLI, AGY, Qwen, Claude Desktop, VS Code, and Cursor
+configurations continue to work. The published Gemini, Qwen, and shared AGY
+manifests now default to the remote service.
 
 For a multi-user deployment, start the server in stateless Streamable HTTP
 mode:

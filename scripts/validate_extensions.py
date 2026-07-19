@@ -12,6 +12,8 @@ from sync_plugin_skills import ROOT, is_synchronized
 
 SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 SKILL_NAME = re.compile(r"^[a-z0-9-]{1,64}$")
+MCP_URL_REFERENCE = "${DEEPBIOLOGY_MCP_URL}"
+AUTHORIZATION_REFERENCE = "Bearer ${DEEPBIOLOGY_API_KEY}"
 
 
 def _json(path: Path):
@@ -34,16 +36,38 @@ def _frontmatter(path: Path) -> dict[str, str]:
 
 def main() -> int:
     gemini = _json(ROOT / "gemini-extension.json")
+    qwen = _json(ROOT / "qwen-extension.json")
     agy = _json(ROOT / "plugin.json")
     agy_mcp = _json(ROOT / "mcp_config.json")
     codex = _json(ROOT / "codex-plugin-python" / ".codex-plugin" / "plugin.json")
     marketplace = _json(ROOT / ".claude-plugin" / "marketplace.json")
 
-    versions = {gemini["version"], codex["version"], marketplace["metadata"]["version"]}
+    versions = {
+        gemini["version"],
+        qwen["version"],
+        codex["version"],
+        marketplace["metadata"]["version"],
+    }
     assert len(versions) == 1 and SEMVER.fullmatch(next(iter(versions))), versions
-    assert gemini["name"] == agy["name"] == "deepbiology-lab"
-    assert "deepbiology-lab" in gemini["mcpServers"]
-    assert "deepbiology-lab" in agy_mcp["mcpServers"]
+    assert gemini["name"] == qwen["name"] == agy["name"] == "deepbiology-lab"
+    gemini_server = gemini["mcpServers"]["deepbiology-lab"]
+    qwen_server = qwen["mcpServers"]["deepbiology-lab"]
+    agy_server = agy_mcp["mcpServers"]["deepbiology-lab"]
+    assert gemini_server == {
+        "httpUrl": MCP_URL_REFERENCE,
+        "headers": {"Authorization": AUTHORIZATION_REFERENCE},
+        "timeout": 1800000,
+    }, gemini_server
+    assert qwen_server == gemini_server, qwen_server
+    assert agy_server == {
+        "serverUrl": MCP_URL_REFERENCE,
+        "headers": {"Authorization": AUTHORIZATION_REFERENCE},
+    }, agy_server
+    gemini_settings = {setting["envVar"]: setting for setting in gemini["settings"]}
+    assert set(gemini_settings) == {"DEEPBIOLOGY_MCP_URL", "DEEPBIOLOGY_API_KEY"}
+    assert gemini_settings["DEEPBIOLOGY_MCP_URL"]["sensitive"] is False
+    assert gemini_settings["DEEPBIOLOGY_API_KEY"]["sensitive"] is True
+    assert qwen["settings"] == gemini["settings"]
     assert codex["mcpServers"] == "./.mcp.json"
 
     skill_files = sorted((ROOT / "skills").glob("*/SKILL.md"))
@@ -56,7 +80,7 @@ def main() -> int:
         assert metadata.get("description"), skill_file
 
     assert is_synchronized(), "Codex skills differ from canonical skills"
-    print("Validated Gemini, AGY, Codex, marketplace, and 13 shared skills.")
+    print("Validated Gemini, Qwen, AGY, Codex, marketplace, and 13 shared skills.")
     return 0
 
 

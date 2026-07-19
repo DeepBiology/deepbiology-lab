@@ -12,22 +12,42 @@ SPEC.loader.exec_module(sync_plugin_skills)
 
 
 class ExtensionPackagingTests(unittest.TestCase):
-    def test_manifests_share_version_and_mcp_command(self):
+    def test_manifests_share_version_and_use_remote_mcp(self):
         gemini = json.loads((ROOT / "gemini-extension.json").read_text())
+        qwen = json.loads((ROOT / "qwen-extension.json").read_text())
         codex = json.loads((ROOT / "codex-plugin-python/.codex-plugin/plugin.json").read_text())
         marketplace = json.loads((ROOT / ".claude-plugin/marketplace.json").read_text())
         agy = json.loads((ROOT / "plugin.json").read_text())
         agy_mcp = json.loads((ROOT / "mcp_config.json").read_text())
 
         self.assertEqual(gemini["version"], codex["version"])
+        self.assertEqual(gemini["version"], qwen["version"])
         self.assertEqual(gemini["version"], marketplace["metadata"]["version"])
+        self.assertEqual(gemini["name"], qwen["name"])
         self.assertEqual(gemini["name"], agy["name"])
+        gemini_server = gemini["mcpServers"]["deepbiology-lab"]
+        qwen_server = qwen["mcpServers"]["deepbiology-lab"]
+        agy_server = agy_mcp["mcpServers"]["deepbiology-lab"]
+        self.assertEqual(gemini_server["httpUrl"], "${DEEPBIOLOGY_MCP_URL}")
+        self.assertEqual(qwen_server, gemini_server)
+        self.assertEqual(agy_server["serverUrl"], "${DEEPBIOLOGY_MCP_URL}")
         self.assertEqual(
-            gemini["mcpServers"]["deepbiology-lab"]["command"],
-            agy_mcp["mcpServers"]["deepbiology-lab"]["command"],
+            gemini_server["headers"],
+            {"Authorization": "Bearer ${DEEPBIOLOGY_API_KEY}"},
         )
-        self.assertNotIn("env", gemini["mcpServers"]["deepbiology-lab"])
-        self.assertNotIn("env", agy_mcp["mcpServers"]["deepbiology-lab"])
+        self.assertEqual(gemini_server["headers"], agy_server["headers"])
+        for server in (gemini_server, agy_server):
+            self.assertNotIn("command", server)
+            self.assertNotIn("args", server)
+            self.assertNotIn("env", server)
+
+        settings = {setting["envVar"]: setting for setting in gemini["settings"]}
+        self.assertEqual(set(settings), {"DEEPBIOLOGY_MCP_URL", "DEEPBIOLOGY_API_KEY"})
+        self.assertFalse(settings["DEEPBIOLOGY_MCP_URL"]["sensitive"])
+        self.assertTrue(settings["DEEPBIOLOGY_API_KEY"]["sensitive"])
+        self.assertEqual(qwen["settings"], gemini["settings"])
+        self.assertIn("Qwen CLI", qwen["description"])
+        self.assertNotIn("Gemini CLI", qwen["description"])
 
     def test_codex_skills_are_generated_from_canonical_skills(self):
         self.assertTrue(sync_plugin_skills.is_synchronized())
